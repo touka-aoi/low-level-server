@@ -1,14 +1,27 @@
 package server
 
 import (
-	"fmt"
+	"encoding/binary"
+	"log"
+	"net/netip"
 	"syscall"
+	"unsafe"
 )
 
-func Listen() {
-	socket := CreateSocket()
+type sockAddr struct {
+	Family uint16
+	Data   [14]byte
+}
 
-	fmt.Println(socket)
+func Listen(address string) error {
+	addr, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return err
+	}
+	socket := CreateSocket()
+	socket.Bind(addr)
+
+	return nil
 }
 
 type Socket struct {
@@ -20,7 +33,8 @@ func CreateSocket() *Socket {
 	// ノンブロッキング、プロセス継承なしでよさそう、tcpを選びたいので、SOCK_STREAMの0番でいいのかな
 	// 基本的にひとつのソケットタイプには一つのプロトコルが割り当てられる
 	// AF_INET | SOCK_STREAM なので 0でいいはず
-	fd, _, err := syscall.Syscall6(
+	// https://man7.org/linux/man-pages/man2/socket.2.html
+	fd, _, errno := syscall.Syscall6(
 		syscall.SYS_SOCKET,
 		syscall.AF_INET,
 		syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC,
@@ -30,14 +44,42 @@ func CreateSocket() *Socket {
 		0)
 
 	if fd < 0 {
-		panic(err)
+		log.Printf("System call failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
 	}
 
 	return &Socket{fd: int(fd)}
 }
 
-func (s *Socket) Bind() {
+func (s *Socket) Bind(address netip.AddrPort) {
+	// https://man7.org/linux/man-pages/man2/bind.2.html
+	sockaddr := sockAddr{
+		Family: syscall.AF_INET,
+	}
 
+	// port
+	port := address.Port()
+	binary.BigEndian.PutUint16(sockaddr.Data[:], port)
+
+	// address
+	addr := address.Addr().AsSlice()
+	for i := 0; i < len(addr); i++ {
+		sockaddr.Data[2+i] = addr[i]
+	}
+
+	res, _, errno := syscall.Syscall6(
+		syscall.SYS_BIND,
+		uintptr(s.fd),
+		uintptr(unsafe.Pointer(&sockaddr)),
+		uintptr(unsafe.Sizeof(&sockaddr)),
+		0,
+		0,
+		0)
+
+	if res < 1 {
+		log.Printf("Bind failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
+	}
 }
 
 func (s *Socket) Listen() {
