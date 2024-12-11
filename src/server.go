@@ -8,6 +8,8 @@ import (
 	"unsafe"
 )
 
+const maxConnection = 4096
+
 type sockAddr struct {
 	Family uint16
 	Data   [14]byte
@@ -20,6 +22,7 @@ func Listen(address string) error {
 	}
 	socket := CreateSocket()
 	socket.Bind(addr)
+	socket.Listen(maxConnection)
 
 	return nil
 }
@@ -82,8 +85,19 @@ func (s *Socket) Bind(address netip.AddrPort) {
 	}
 }
 
-func (s *Socket) Listen() {
+func (s *Socket) Listen(maxConn int) {
+	res, _, errno := syscall.Syscall6(
+		syscall.SYS_LISTEN,
+		uintptr(maxConn),
+		0,
+		0, 0,
+		0,
+		0)
 
+	if res < 1 {
+		log.Printf("Listen failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
+	}
 }
 
 // クローズ処理？
