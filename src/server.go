@@ -1,10 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
+	"golang.org/x/sys/unix"
 	"log"
 	"net/netip"
-	"syscall"
 	"unsafe"
 )
 
@@ -15,7 +16,61 @@ type sockAddr struct {
 	Data   [14]byte
 }
 
-func Listen(address string) error {
+type UringParams struct {
+	SqEntry       uint32
+	CqEntry       uint32
+	Flags         uint32
+	SqThreadCPU   uint32
+	SqThreadIdle  uint32
+	Features      uint32
+	WqFd          uint32
+	Resv          [3]uint32
+	SQRingOffsets SQRingOffsets
+	CQRingOffsets CQRingOffsets
+}
+
+type SQRingOffsets struct {
+	Head        uint32
+	Tail        uint32
+	RingMask    uint32
+	RingEntries uint32
+	Flags       uint32
+	Dropped     uint32
+	Array       uint32
+	Resv1       uint32
+	UserAddr    uint64
+}
+
+type CQRingOffsets struct {
+	Head        uint32
+	Tail        uint32
+	RingMask    uint32
+	RingEntries uint32
+	Overflow    uint32
+	CQEs        uint32
+	Flags       uint32
+	Resv1       uint32
+	UserAddr    uint64
+}
+
+func CreateUring(entries uint32) {
+	params := UringParams{}
+	_, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_SETUP,
+		uintptr(entries),
+		uintptr(unsafe.Pointer(&params)),
+		0,
+		0,
+		0,
+		0)
+
+	if errno != 0 {
+		log.Printf("CreateUring failed: %v", errno)
+	}
+
+}
+
+func Listen(ctx context.Context, address string) error {
 	addr, err := netip.ParseAddrPort(address)
 	if err != nil {
 		return err
@@ -23,6 +78,12 @@ func Listen(address string) error {
 	socket := CreateSocket()
 	socket.Bind(addr)
 	socket.Listen(maxConnection)
+
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
 
 	return nil
 }
@@ -37,10 +98,10 @@ func CreateSocket() *Socket {
 	// 基本的にひとつのソケットタイプには一つのプロトコルが割り当てられる
 	// AF_INET | SOCK_STREAM なので 0でいいはず
 	// https://man7.org/linux/man-pages/man2/socket.2.html
-	fd, _, errno := syscall.Syscall6(
-		syscall.SYS_SOCKET,
-		syscall.AF_INET,
-		syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC,
+	fd, _, errno := unix.Syscall6(
+		unix.SYS_SOCKET,
+		unix.AF_INET,
+		unix.SOCK_STREAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC,
 		0,
 		0,
 		0,
@@ -57,7 +118,7 @@ func CreateSocket() *Socket {
 func (s *Socket) Bind(address netip.AddrPort) {
 	// https://man7.org/linux/man-pages/man2/bind.2.html
 	sockaddr := sockAddr{
-		Family: syscall.AF_INET,
+		Family: unix.AF_INET,
 	}
 
 	// port
@@ -70,8 +131,8 @@ func (s *Socket) Bind(address netip.AddrPort) {
 		sockaddr.Data[2+i] = addr[i]
 	}
 
-	res, _, errno := syscall.Syscall6(
-		syscall.SYS_BIND,
+	res, _, errno := unix.Syscall6(
+		unix.SYS_BIND,
 		uintptr(s.fd),
 		uintptr(unsafe.Pointer(&sockaddr)),
 		uintptr(unsafe.Sizeof(&sockaddr)),
@@ -86,8 +147,8 @@ func (s *Socket) Bind(address netip.AddrPort) {
 }
 
 func (s *Socket) Listen(maxConn int) {
-	res, _, errno := syscall.Syscall6(
-		syscall.SYS_LISTEN,
+	res, _, errno := unix.Syscall6(
+		unix.SYS_LISTEN,
 		uintptr(maxConn),
 		0,
 		0, 0,
@@ -106,7 +167,7 @@ func (s *Socket) Unbind() {
 }
 
 func Accept() {
-
+	CreateUring(maxConnection)
 }
 
 func Serve() {
