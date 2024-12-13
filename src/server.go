@@ -6,10 +6,85 @@ import (
 	"golang.org/x/sys/unix"
 	"log"
 	"net/netip"
+	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
 const maxConnection = 4096
+
+const (
+	IORING_OFF_SQ_RING int64 = 0
+	ORING_OFF_CQ_RING  int64 = 0x8000000
+	IORING_OFF_SQES    int64 = 0x10000000
+)
+
+const (
+	IORING_OP_NOP = iota
+	IORING_OP_READV
+	IORING_OP_WRITEV
+	IORING_OP_FSYNC
+	IORING_OP_READ_FIXED
+	IORING_OP_WRITE_FIXED
+	IORING_OP_POLL_ADD
+	IORING_OP_POLL_REMOVE
+	IORING_OP_SYNC_FILE_RANGE
+	IORING_OP_SENDMSG
+	IORING_OP_RECVMSG
+	IORING_OP_TIMEOUT
+	IORING_OP_TIMEOUT_REMOVE
+	IORING_OP_ACCEPT
+	IORING_OP_ASYNC_CANCEL
+	IORING_OP_LINK_TIMEOUT
+	IORING_OP_CONNECT
+	IORING_OP_FALLOCATE
+	IORING_OP_OPENAT
+	IORING_OP_CLOSE
+	IORING_OP_FILES_UPDATE
+	IORING_OP_STATX
+	IORING_OP_READ
+	IORING_OP_WRITE
+	IORING_OP_FADVISE
+	IORING_OP_MADVISE
+	IORING_OP_SEND
+	IORING_OP_RECV
+	IORING_OP_OPENAT2
+	IORING_OP_EPOLL_CTL
+	IORING_OP_SPLICE
+	IORING_OP_PROVIDE_BUFFERS
+	IORING_OP_REMOVE_BUFFERS
+	IORING_OP_TEE
+	IORING_OP_SHUTDOWN
+	IORING_OP_RENAMEAT
+	IORING_OP_UNLINKAT
+	IORING_OP_MKDIRAT
+	IORING_OP_SYMLINKAT
+	IORING_OP_LINKAT
+	IORING_OP_MSG_RING
+	IORING_OP_FSETXATTR
+	IORING_OP_SETXATTR
+	IORING_OP_FGETXATTR
+	IORING_OP_GETXATTR
+	IORING_OP_SOCKET
+	IORING_OP_URING_CMD
+	IORING_OP_SEND_ZC
+	IORING_OP_SENDMSG_ZC
+	IORING_OP_READ_MULTISHOT
+	IORING_OP_WAITID
+	IORING_OP_FUTEX_WAIT
+	IORING_OP_FUTEX_WAKE
+	IORING_OP_FUTEX_WAITV
+	IORING_OP_FIXED_FD_INSTALL
+	IORING_OP_FTRUNCATE
+	IORING_OP_BIND
+	IORING_OP_LISTEN
+
+	IORING_OP_LAST
+)
+
+const (
+	IORING_FEAT_SINGLE_MMAP = 1 << 0
+)
 
 type sockAddr struct {
 	Family uint16
@@ -17,33 +92,33 @@ type sockAddr struct {
 }
 
 type UringParams struct {
-	SqEntry       uint32
-	CqEntry       uint32
-	Flags         uint32
-	SqThreadCPU   uint32
-	SqThreadIdle  uint32
-	Features      uint32
-	WqFd          uint32
-	Resv          [3]uint32
-	SQRingOffsets SQRingOffsets
-	CQRingOffsets CQRingOffsets
+	SqEntry      uint32 // エントリの数
+	CqEntry      uint32 // エントリの数
+	Flags        uint32 // uringのオプションフラグ
+	SqThreadCPU  uint32
+	SqThreadIdle uint32
+	Features     uint32 // uringの機能フラグ
+	WqFd         uint32
+	Resv         [3]uint32
+	SQOffsets    SQOffsets
+	CQOffsets    CQOffsets
 }
 
-type SQRingOffsets struct {
-	Head        uint32
-	Tail        uint32
-	RingMask    uint32
-	RingEntries uint32
-	Flags       uint32
-	Dropped     uint32
-	Array       uint32
+type SQOffsets struct {
+	Head        uint32 // カーネルが処理済みのSQEの位置
+	Tail        uint32 // ユーザーがSQEを追加する位置
+	RingMask    uint32 // リング循環用のマスク ( 最大値 - 1 )
+	RingEntries uint32 // リングの総容量
+	Flags       uint32 // フラグ
+	Dropped     uint32 // 処理されなかったリクエストの数
+	Array       uint32 // SQEへのポインタ
 	Resv1       uint32
 	UserAddr    uint64
 }
 
-type CQRingOffsets struct {
-	Head        uint32
-	Tail        uint32
+type CQOffsets struct {
+	Head        uint32 // ユーザーが読み取った位置
+	Tail        uint32 // カーネルが完了した位置
 	RingMask    uint32
 	RingEntries uint32
 	Overflow    uint32
@@ -53,9 +128,46 @@ type CQRingOffsets struct {
 	UserAddr    uint64
 }
 
-func CreateUring(entries uint32) {
+type UringSQE struct {
+	Opcode      uint8
+	Flags       uint8
+	Ioprio      uint16
+	Fd          int32
+	Offset      uint64
+	Address     uint64
+	Len         uint32
+	UserFlags   uint32 // union
+	UserData    uint64
+	BufIndex    uint16
+	Personality uint16
+	SpliceFdIn  int32
+	Pad2        [2]uint64
+}
+
+type UringCQE struct {
+	UserData uint64
+	Res      int32
+	Flags    uint32
+}
+
+type Uring struct {
+	Fd int32
+	SQ SQ
+}
+
+type SQ struct {
+	SQPtr    uintptr
+	Head     *uint32
+	Tail     *uint32
+	Mask     *uint32
+	Entries  *uint32
+	ArrayPtr uintptr
+	SQEPtr   uintptr
+}
+
+func CreateUring(entries uint32) *Uring {
 	params := UringParams{}
-	_, _, errno := unix.Syscall6(
+	fd, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_SETUP,
 		uintptr(entries),
 		uintptr(unsafe.Pointer(&params)),
@@ -65,8 +177,60 @@ func CreateUring(entries uint32) {
 		0)
 
 	if errno != 0 {
-		log.Printf("CreateUring failed: %v", errno)
+		log.Printf("IO_URING_SETUP failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
 	}
+
+	SQData, err := unix.Mmap(
+		int(fd),
+		IORING_OFF_SQ_RING,
+		int(params.SQOffsets.Array+params.SqEntry*uint32(unsafe.Sizeof(uint32(0)))),
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_SHARED|unix.MAP_POPULATE,
+	)
+
+	if err != nil {
+		log.Printf("Mmap failed with errno: %d (%s)", err, err.Error())
+		panic(err)
+	}
+
+	SQPtr := uintptr(unsafe.Pointer(unsafe.SliceData(SQData)))
+
+	SQEData, err := unix.Mmap(
+		int(fd),
+		IORING_OFF_SQES,
+		int(params.SqEntry*uint32(unsafe.Sizeof(UringSQE{}))),
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_SHARED|unix.MAP_POPULATE,
+	)
+
+	SQEPtr := uintptr(unsafe.Pointer(unsafe.SliceData(SQEData)))
+
+	if err != nil {
+		log.Printf("Mmap failed with errno: %d (%s)", err, err.Error())
+		panic(err)
+	}
+
+	if params.Features&IORING_FEAT_SINGLE_MMAP == IORING_FEAT_SINGLE_MMAP {
+
+	} else {
+		//TODO: kernel 5.4以前の対応
+	}
+
+	uring := &Uring{
+		Fd: int32(fd),
+		SQ: SQ{
+			SQPtr:    SQPtr,
+			Head:     (*uint32)(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.Head))),
+			Tail:     (*uint32)(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.Tail))),
+			Entries:  (*uint32)(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.RingEntries))),
+			Mask:     (*uint32)(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.RingMask))),
+			ArrayPtr: uintptr(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.Array))),
+			SQEPtr:   SQEPtr,
+		},
+	}
+
+	return uring
 
 }
 
@@ -108,7 +272,7 @@ func CreateSocket() *Socket {
 		0)
 
 	if fd < 0 {
-		log.Printf("System call failed with errno: %d (%s)", errno, errno.Error())
+		log.Printf("Socket failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
 
@@ -167,7 +331,52 @@ func (s *Socket) Unbind() {
 }
 
 func Accept() {
-	CreateUring(maxConnection)
+	uring := CreateUring(maxConnection)
+	uring.Accpet()
+}
+
+func (u *Uring) Accpet() {
+	// Entryを作る
+	//MEMO: ここで設定するfdはリスニングソケット(↑で作ったやつ)である必要がある
+	op := UringSQE{
+		Opcode: IORING_OP_NOP,
+	}
+
+	//MEMO: tailの取得, SQEの書き込みをatomicに行う
+	for {
+		tail := atomic.LoadUint32(u.SQ.Tail)
+
+		//TODO: 満杯になるケースを考慮する
+
+		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
+			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
+			sqe[tail&*u.SQ.Mask] = op
+
+			//TDOO: NO_ARRAYも試してみる
+			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
+			array[tail&*u.SQ.Mask] = tail
+
+			break
+		}
+
+		runtime.Gosched()
+	}
+
+	res, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_ENTER,
+		uintptr(u.Fd),
+		1,
+		0,
+		0,
+		0,
+		0)
+
+	if res < 0 || errno != 0 {
+		//TODO エラーとして返す
+		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
+	}
+
 }
 
 func Serve() {
