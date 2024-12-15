@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"golang.org/x/sys/unix"
 	"log"
+	"log/slog"
 	"net/netip"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -17,6 +20,17 @@ const (
 	IORING_OFF_SQ_RING int64 = 0
 	ORING_OFF_CQ_RING  int64 = 0x8000000
 	IORING_OFF_SQES    int64 = 0x10000000
+)
+
+// IO_URING_ENTER flags
+const (
+	IORING_ENTER_GETEVENTS = 1 << iota
+	IORING_ENTER_SQ_WAKEUP
+	IORING_ENTER_SQ_WAIT
+	IORING_ENTER_EXT_ARG
+	IORING_ENTER_REGISTERED_RING
+	IORING_ENTER_ABS_TIMER
+	IORING_ENTER_EXT_ARG_REG
 )
 
 const (
@@ -133,15 +147,15 @@ type UringSQE struct {
 	Flags       uint8
 	Ioprio      uint16
 	Fd          int32
-	Offset      uint64
-	Address     uint64
+	Offset      uint64 // addr2
+	Address     uint64 // addr1
 	Len         uint32
 	UserFlags   uint32 // union
 	UserData    uint64
 	BufIndex    uint16
 	Personality uint16
 	SpliceFdIn  int32
-	Pad2        [2]uint64
+	Pad2        [2]uint64 // addr3
 }
 
 type UringCQE struct {
@@ -153,6 +167,7 @@ type UringCQE struct {
 type Uring struct {
 	Fd int32
 	SQ SQ
+	CQ CQ
 }
 
 type SQ struct {
@@ -163,6 +178,15 @@ type SQ struct {
 	Entries  *uint32
 	ArrayPtr uintptr
 	SQEPtr   uintptr
+}
+
+type CQ struct {
+	CQPtr   uintptr
+	Head    *uint32
+	Tail    *uint32
+	Mask    *uint32
+	Entries *uint32
+	CQEs    *uint32
 }
 
 func CreateUring(entries uint32) *Uring {
@@ -199,7 +223,7 @@ func CreateUring(entries uint32) *Uring {
 	SQEData, err := unix.Mmap(
 		int(fd),
 		IORING_OFF_SQES,
-		int(params.SqEntry*uint32(unsafe.Sizeof(UringSQE{}))),
+		int(params.SqEntry)*int(unsafe.Sizeof(UringSQE{})),
 		unix.PROT_READ|unix.PROT_WRITE,
 		unix.MAP_SHARED|unix.MAP_POPULATE,
 	)
@@ -211,8 +235,9 @@ func CreateUring(entries uint32) *Uring {
 		panic(err)
 	}
 
+	var CQPtr uintptr
 	if params.Features&IORING_FEAT_SINGLE_MMAP == IORING_FEAT_SINGLE_MMAP {
-
+		CQPtr = SQPtr
 	} else {
 		//TODO: kernel 5.4以前の対応
 	}
@@ -228,32 +253,37 @@ func CreateUring(entries uint32) *Uring {
 			ArrayPtr: uintptr(unsafe.Pointer(SQPtr + uintptr(params.SQOffsets.Array))),
 			SQEPtr:   SQEPtr,
 		},
+		CQ: CQ{
+			CQPtr:   CQPtr,
+			Head:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.Head))),
+			Tail:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.Tail))),
+			Entries: (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.RingEntries))),
+			Mask:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.RingMask))),
+			CQEs:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.CQEs))),
+		},
 	}
+
+	fmt.Println(uring)
 
 	return uring
 
 }
 
-func Listen(ctx context.Context, address string) error {
+func Listen(ctx context.Context, address string) (*Socket, error) {
 	addr, err := netip.ParseAddrPort(address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	socket := CreateSocket()
+
 	socket.Bind(addr)
-	socket.Listen(maxConnection)
+	socket.Listen(ctx, maxConnection)
 
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
-	}
-
-	return nil
+	return socket, nil
 }
 
 type Socket struct {
-	fd int
+	Fd int32
 }
 
 func CreateSocket() *Socket {
@@ -276,7 +306,7 @@ func CreateSocket() *Socket {
 		panic(errno)
 	}
 
-	return &Socket{fd: int(fd)}
+	return &Socket{Fd: int32(fd)}
 }
 
 func (s *Socket) Bind(address netip.AddrPort) {
@@ -297,29 +327,30 @@ func (s *Socket) Bind(address netip.AddrPort) {
 
 	res, _, errno := unix.Syscall6(
 		unix.SYS_BIND,
-		uintptr(s.fd),
+		uintptr(s.Fd),
 		uintptr(unsafe.Pointer(&sockaddr)),
-		uintptr(unsafe.Sizeof(&sockaddr)),
+		uintptr(unsafe.Sizeof(sockaddr)),
 		0,
 		0,
 		0)
 
-	if res < 1 {
+	if res != 0 {
 		log.Printf("Bind failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
 }
 
-func (s *Socket) Listen(maxConn int) {
+func (s *Socket) Listen(ctx context.Context, maxConn int) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_LISTEN,
+		uintptr(s.Fd),
 		uintptr(maxConn),
 		0,
-		0, 0,
+		0,
 		0,
 		0)
 
-	if res < 1 {
+	if res != 0 {
 		log.Printf("Listen failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
@@ -330,16 +361,34 @@ func (s *Socket) Unbind() {
 
 }
 
-func Accept() {
-	uring := CreateUring(maxConnection)
-	uring.Accpet()
+func Accept(ctx context.Context, socket *Socket) {
+	go func() {
+		uring := CreateUring(maxConnection)
+		uring.Accpet(socket) // アクセプト命令を送る
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				uring.Accept2()
+				os.Exit(1)
+			}
+		}
+	}() // ブロッキングして待機
+	//TODO 受信したものをServeへ回す
+	<-ctx.Done()
 }
 
-func (u *Uring) Accpet() {
+func (u *Uring) Accpet(socket *Socket) {
 	// Entryを作る
 	//MEMO: ここで設定するfdはリスニングソケット(↑で作ったやつ)である必要がある
+	sockaddr := sockAddr{}
+	sockLen := uint32(unsafe.Sizeof(sockaddr))
 	op := UringSQE{
-		Opcode: IORING_OP_NOP,
+		Opcode:  IORING_OP_ACCEPT,
+		Fd:      socket.Fd,
+		Offset:  uint64(uintptr(unsafe.Pointer(&sockLen))),
+		Address: uint64(uintptr(unsafe.Pointer(&sockaddr))),
 	}
 
 	//MEMO: tailの取得, SQEの書き込みをatomicに行う
@@ -375,6 +424,46 @@ func (u *Uring) Accpet() {
 		//TODO エラーとして返す
 		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
+	}
+
+	slog.Debug("Send Accpet Operation")
+}
+
+func (u *Uring) Accept2() {
+	// CQEをブロッキングして待つ
+
+	slog.Debug("Block Accpet Operation")
+	res, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_ENTER,
+		uintptr(u.Fd),
+		0,
+		1,
+		IORING_ENTER_GETEVENTS,
+		0,
+		0)
+	slog.Debug("End Block")
+
+	if res < 0 || errno != 0 {
+		//TODO エラーとして返す
+		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
+	}
+
+	// CQEを取得する
+	for {
+		head, tail := atomic.LoadUint32(u.CQ.Head), atomic.LoadUint32(u.CQ.Tail)
+		if head == tail {
+			slog.Debug("No completion events found, but io_uring_enter did not block")
+			continue
+		}
+
+		if atomic.CompareAndSwapUint32(u.CQ.Head, head, head+1) {
+			cqe := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQPtr)), *u.CQ.Entries)
+			c := cqe[head&*u.CQ.Mask]
+			fmt.Println(c)
+
+			break
+		}
 	}
 
 }
