@@ -8,7 +8,6 @@ import (
 	"log"
 	"log/slog"
 	"net/netip"
-	"os"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -136,7 +135,7 @@ type CQOffsets struct {
 	RingMask    uint32
 	RingEntries uint32
 	Overflow    uint32
-	CQEs        uint32
+	CQEs        uint32 // CQEへのポインタ
 	Flags       uint32
 	Resv1       uint32
 	UserAddr    uint64
@@ -188,6 +187,20 @@ type CQ struct {
 	Entries *uint32
 	CQEs    *uint32
 }
+
+type Peer struct {
+	Fd      int32
+	address []byte
+	port    int
+}
+
+//func (p *Peer) Network() string {
+//
+//}
+//
+//func (p *Peer) String() string {
+//
+//}
 
 func CreateUring(entries uint32) *Uring {
 	params := UringParams{}
@@ -295,7 +308,7 @@ func CreateSocket() *Socket {
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,
 		unix.AF_INET,
-		unix.SOCK_STREAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC,
+		unix.SOCK_STREAM|unix.SOCK_CLOEXEC,
 		0,
 		0,
 		0,
@@ -362,21 +375,16 @@ func (s *Socket) Unbind() {
 }
 
 func Accept(ctx context.Context, socket *Socket) {
-	go func() {
-		uring := CreateUring(maxConnection)
-		uring.Accpet(socket) // アクセプト命令を送る
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				uring.Accept2()
-				os.Exit(1)
-			}
+	uring := CreateUring(maxConnection)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			uring.Accpet(socket)
 		}
-	}() // ブロッキングして待機
+	}
 	//TODO 受信したものをServeへ回す
-	<-ctx.Done()
 }
 
 func (u *Uring) Accpet(socket *Socket) {
@@ -385,10 +393,11 @@ func (u *Uring) Accpet(socket *Socket) {
 	sockaddr := sockAddr{}
 	sockLen := uint32(unsafe.Sizeof(sockaddr))
 	op := UringSQE{
-		Opcode:  IORING_OP_ACCEPT,
-		Fd:      socket.Fd,
-		Offset:  uint64(uintptr(unsafe.Pointer(&sockLen))),
-		Address: uint64(uintptr(unsafe.Pointer(&sockaddr))),
+		Opcode:   IORING_OP_ACCEPT,
+		Fd:       socket.Fd,
+		Offset:   uint64(uintptr(unsafe.Pointer(&sockLen))),
+		Address:  uint64(uintptr(unsafe.Pointer(&sockaddr))),
+		UserData: 1,
 	}
 
 	//MEMO: tailの取得, SQEの書き込みをatomicに行う
@@ -427,13 +436,9 @@ func (u *Uring) Accpet(socket *Socket) {
 	}
 
 	slog.Debug("Send Accpet Operation")
-}
-
-func (u *Uring) Accept2() {
-	// CQEをブロッキングして待つ
 
 	slog.Debug("Block Accpet Operation")
-	res, _, errno := unix.Syscall6(
+	res, _, errno = unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
 		0,
@@ -458,14 +463,28 @@ func (u *Uring) Accept2() {
 		}
 
 		if atomic.CompareAndSwapUint32(u.CQ.Head, head, head+1) {
-			cqe := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQPtr)), *u.CQ.Entries)
-			c := cqe[head&*u.CQ.Mask]
-			fmt.Println(c)
+			cqe := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQEs)), *u.CQ.Entries)
+			cq := cqe[head&*u.CQ.Mask]
 
-			break
+			if cq.Res < 0 {
+				err := unix.Errno(cq.Res)
+				slog.DebugContext(context.TODO(), "err", fmt.Sprintf("%s : %s", unix.ErrnoName(err), err.Error()))
+			}
+
+			// IPv4
+			var port int
+			if sockaddr.Family == unix.AF_INET {
+				port = int(binary.BigEndian.Uint16(sockaddr.Data[0:2]))
+			}
+
+			_ = Peer{
+				Fd:      int32(cq.Res),
+				address: sockaddr.Data[2:6],
+				port:    port,
+			}
 		}
+		break
 	}
-
 }
 
 func Serve() {

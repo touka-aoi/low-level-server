@@ -23,31 +23,41 @@ func main() {
 	defer cancel()
 	// ここは最終的には server.Run() とかにしたい
 
-	addr, _ := netip.ParseAddrPort("127.0.0.1:8000")
+	addr, _ := netip.ParseAddrPort("127.0.0.1:8080")
 	socket := server.CreateSocket()
 	socket.Bind(addr)
-	go socket.Listen(ctx, 4096)
+	socket.Listen(ctx, 4096)
+	slog.Debug("Start Listen")
 
-	//var addrOut unix.SockaddrInet4
-	//var addrLen uint32 = uint32(unsafe.Sizeof(addrOut))
-	//_, _, errno := unix.Syscall6(
+	go server.Accept(ctx, socket)
+
+	<-ctx.Done()
+
+	//_, _, err := unix.Accept4(int(socket.Fd), unix.SOCK_NONBLOCK)
+	//if err != nil {
+	//	panic(err)
+	//}
+
+	//fmt.Println("accept")
+	//sockaddr := sockAddr{}
+	//addrLen := uint32(unsafe.Sizeof(sockaddr))
+	//fd, _, errno := unix.Syscall6(
 	//	unix.SYS_ACCEPT4,
 	//	uintptr(socket.Fd),
-	//	uintptr(unsafe.Pointer(&addrOut)),
+	//	uintptr(unsafe.Pointer(&sockaddr)),
 	//	uintptr(unsafe.Pointer(&addrLen)),
 	//	0,
 	//	0,
 	//	0,
 	//)
-	//
-	//if errno != 0 {
-	//	log.Printf("Listen failed with errno: %d (%s)", errno, errno.Error())
-	//	panic(errno)
-	//}
 
-	select {
-	case <-ctx.Done():
-	}
+	//if errno != 0 {
+	//	log.Printf("Accept failed with errno: %d (%s)", errno, errno.Error())
+	//	panic(unix.ErrnoName(errno))
+	//}
+	//
+	//fmt.Println("Accpet", fd)
+
 	//server.Accept(ctx, socket)
 	//if err != nil {
 	//	log.Fatal(err)
