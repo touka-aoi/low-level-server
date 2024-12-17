@@ -1,16 +1,17 @@
 package server
 
 import (
-	"context"
-	"encoding/binary"
-	"fmt"
-	"golang.org/x/sys/unix"
-	"log"
-	"log/slog"
-	"net/netip"
-	"runtime"
-	"sync/atomic"
-	"unsafe"
+  "context"
+  "encoding/binary"
+  "fmt"
+  "golang.org/x/sys/unix"
+  "log"
+  "log/slog"
+  "net"
+  "net/netip"
+  "runtime"
+  "sync/atomic"
+  "unsafe"
 )
 
 const maxConnection = 4096
@@ -98,6 +99,10 @@ const (
 const (
 	IORING_FEAT_SINGLE_MMAP = 1 << 0
 )
+
+type server struct {
+  connections chan Peer
+}
 
 type sockAddr struct {
 	Family uint16
@@ -472,16 +477,26 @@ func (u *Uring) Accpet(socket *Socket) {
 			}
 
 			// IPv4
-			var port int
-			if sockaddr.Family == unix.AF_INET {
-				port = int(binary.BigEndian.Uint16(sockaddr.Data[0:2]))
-			}
+      switch sockaddr.Family {
+      case unix.AF_INET:
+        port := binary.BigEndian.Uint16(sockaddr.Data[0:2])
+        addr := netip.AddrFrom4([4]byte(sockaddr.Data[2:6]))
 
-			_ = Peer{
-				Fd:      int32(cq.Res),
-				address: sockaddr.Data[2:6],
-				port:    port,
-			}
+        ip := netip.AddrPortFrom(addr, port)
+        
+        net.Conn()
+        
+        //TODO: net.Conn interfaceを満たすようにする
+        
+        peer := Peer{
+        Fd: int32(cq.Res),
+        Conn: conn
+       }
+       
+       connections <- peer
+      }
+      
+      
 		}
 		break
 	}
