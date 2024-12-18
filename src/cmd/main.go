@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	server "github.com/touka-aoi/low-level-server"
+	"github.com/touka-aoi/low-level-server"
 	"log/slog"
-	"net/netip"
 	"os"
 	"os/signal"
 )
@@ -22,14 +21,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	// ここは最終的には server.Run() とかにしたい
+	//
+	//addr, _ := netip.ParseAddrPort("127.0.0.1:8080")
+	//socket := server.CreateSocket()
+	//socket.Bind(addr)
+	//socket.Listen(ctx, 4096)
+	//slog.Debug("Start Listen")
+	//
+	//go server.Accept(ctx, socket)
 
-	addr, _ := netip.ParseAddrPort("127.0.0.1:8080")
-	socket := server.CreateSocket()
-	socket.Bind(addr)
-	socket.Listen(ctx, 4096)
-	slog.Debug("Start Listen")
-
-	go server.Accept(ctx, socket)
+	s := server.NewServer()
+	err := s.Listen(ctx, "127.0.0.1:888")
+	if err != nil {
+		slog.DebugContext(ctx, "Listen", "err", err)
+	}
+	s.Serve()
 
 	<-ctx.Done()
 
