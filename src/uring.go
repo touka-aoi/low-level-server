@@ -129,9 +129,12 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd int32
-	SQ SQ
-	CQ CQ
+	Fd         int32
+	SQ         SQ
+	CQ         CQ
+	sockAddr   sockAddr
+	sockLen    uint32
+	AccpetChan chan Peer
 }
 
 type SQ struct {
@@ -225,6 +228,7 @@ func CreateUring(entries uint32) *Uring {
 			Mask:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.RingMask))),
 			CQEs:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.CQEs))),
 		},
+		AccpetChan: make(chan Peer, 1024),
 	}
 
 	return uring
@@ -232,14 +236,14 @@ func CreateUring(entries uint32) *Uring {
 }
 
 func (u *Uring) Accpet(socket *Socket) {
-	sockaddr := sockAddr{}
-	sockLen := uint32(unsafe.Sizeof(sockaddr))
+	u.sockAddr = sockAddr{}
+	u.sockLen = uint32(unsafe.Sizeof(u.sockAddr))
 	op := UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
-		Ioprio:   IORING_ACCEPT_MULTISHOT,
+		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
-		Offset:   uint64(uintptr(unsafe.Pointer(&sockLen))),
-		Address:  uint64(uintptr(unsafe.Pointer(&sockaddr))),
+		Offset:   uint64(uintptr(unsafe.Pointer(&u.sockLen))),
+		Address:  uint64(uintptr(unsafe.Pointer(&u.sockAddr))),
 		UserData: 1,
 	}
 
@@ -277,8 +281,6 @@ func (u *Uring) Accpet(socket *Socket) {
 		panic(errno)
 	}
 
-	slog.Debug("Send Accpet Operation")
-
 	slog.Debug("Block Accpet Operation")
 	res, _, errno = unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
@@ -314,10 +316,10 @@ func (u *Uring) Accpet(socket *Socket) {
 			}
 
 			// IPv4
-			switch sockaddr.Family {
+			switch u.sockAddr.Family {
 			case unix.AF_INET:
-				port := binary.BigEndian.Uint16(sockaddr.Data[0:2])
-				addr := netip.AddrFrom4([4]byte(sockaddr.Data[2:6]))
+				port := binary.BigEndian.Uint16(u.sockAddr.Data[0:2])
+				addr := netip.AddrFrom4([4]byte(u.sockAddr.Data[2:6]))
 
 				ip := netip.AddrPortFrom(addr, port)
 
@@ -326,7 +328,7 @@ func (u *Uring) Accpet(socket *Socket) {
 					Ip: ip,
 				}
 
-				fmt.Println(peer)
+				u.AccpetChan <- peer
 
 			}
 			break
