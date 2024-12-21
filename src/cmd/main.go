@@ -31,11 +31,11 @@ func main() {
 	//go server.Accept(ctx, socket)
 
 	s := server.NewServer()
-	err := s.Listen(ctx, "127.0.0.1:888")
+	err := s.Listen(ctx, "127.0.0.1:8080")
 	if err != nil {
 		slog.DebugContext(ctx, "Listen", "err", err)
 	}
-	s.Serve()
+	//s.Serve()
 
 	<-ctx.Done()
 
