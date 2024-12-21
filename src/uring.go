@@ -15,6 +15,12 @@ import (
 )
 
 const (
+	EVENT_TYPE_ACCEPT = iota
+	EVENT_TYPE_READ
+	EVENT_TYPE_WRITE
+)
+
+const (
 	IORING_OFF_SQ_RING int64 = 0
 	ORING_OFF_CQ_RING  int64 = 0x8000000
 	IORING_OFF_SQES    int64 = 0x10000000
@@ -135,6 +141,7 @@ type Uring struct {
 	sockAddr   sockAddr
 	sockLen    uint32
 	AccpetChan chan Peer
+	Buffer     []byte
 }
 
 type SQ struct {
@@ -262,7 +269,6 @@ func (u *Uring) Accpet(socket *Socket) {
 
 			break
 		}
-
 		runtime.Gosched()
 	}
 
@@ -333,6 +339,42 @@ func (u *Uring) Accpet(socket *Socket) {
 			}
 			break
 		}
+	}
+}
+
+func (u *Uring) WatchRead(peer *Peer) error {
+	u.Buffer = make([]byte, 1024)
+	op := UringSQE{
+		Opcode:   IORING_OP_READ,
+		Fd:       peer.Fd,
+		Address:  uint64(uintptr(unsafe.Pointer(&u.Buffer))),
+		UserData: 2,
+	}
+
+	// TOOD ここのforループを関数化する
+	for {
+		tail := atomic.LoadUint32(u.SQ.Tail)
+
+		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
+			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
+			sqe[tail&*u.SQ.Mask] = op
+
+			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
+			array[tail&*u.SQ.Mask] = tail
+
+			break
+		}
+		runtime.Gosched()
+	}
+
+	return nil
+}
+
+func (u *Uring) Wait() {
+	// CQEが読み取れるなら読み取る
+	// ノンブロッキング想定なのでブロックはしない
+	for {
+
 	}
 }
 
