@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"golang.org/x/sys/unix"
 	"log/slog"
+	"net/http"
 	"net/netip"
+	"os"
 	"unsafe"
 )
 
@@ -91,7 +95,7 @@ LOOP:
 
 			//TODO: cqeからデータを受け取ることがわかるもっといい名前
 			cqe := a.uring.Wait()
-			slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "cqe user data", cqe.UserData, "cqe flags", cqe.Flags)
+			//slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "cqe user data", cqe.UserData, "cqe flags", cqe.Flags)
 
 			// handle eventとして関数化したいな
 			switch cqe.UserData {
@@ -115,11 +119,66 @@ LOOP:
 				}
 			case EVENT_TYPE_READ:
 				data := a.uring.Read(cqe)
-				slog.InfoContext(ctx, "Read", "data", string(data))
-				//a.service.HandleData(data)
+				// reacするときにfdを確保していないといけない気がする。というのもwriteもしないといけないのでどうしようといったところだ。
+				//
+				a.HandleData(data)
 			}
 		}
 	}
 
 	slog.InfoContext(ctx, "MainLoop end")
+}
+
+func (a *Acceptor) HandleData(r *bufio.Reader) {
+	req, err := http.ReadRequest(r)
+	if err != nil {
+		slog.Error("ReadRequest", "err", err)
+	}
+	slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
+
+	// fdからwriterを作成しないといけない
+	rw := NewBufioResponseWriter()
+	mux := http.NewServeMux()
+	mux.ServeHTTP(rw, req)
+
+	if err := a.writer.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
+	}
+}
+
+type bufioResponseWriter struct {
+	writer      *bufio.Writer
+	headers     http.Header
+	status      int
+	wroteHeader bool
+}
+
+func NewBufioResponseWriter(w *bufio.Writer) *bufioResponseWriter {
+	return &bufioResponseWriter{
+		writer:  w,
+		headers: make(http.Header),
+		status:  http.StatusOK,
+	}
+}
+
+func (w *bufioResponseWriter) Header() http.Header {
+	return w.headers
+}
+
+func (w *bufioResponseWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.writer.Write(data)
+}
+
+func (w *bufioResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = statusCode
+	fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", w.status, http.StatusText(w.status))
+	w.headers.Write(w.writer)
+	w.writer.WriteString("\r\n")
+	w.wroteHeader = true
 }

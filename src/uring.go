@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -341,9 +343,12 @@ func (u *Uring) Wait() *UringCQE {
 	return cqe
 }
 
-func (u *Uring) Read(cqe *UringCQE) []byte {
+func (u *Uring) Read(cqe *UringCQE) *bufio.Reader {
 	//TODO fixed bufferを使うように変更
-	return u.Buffer[:cqe.Res]
+	copyBuffer := make([]byte, cqe.Res)
+	copy(copyBuffer, u.Buffer[:cqe.Res])
+	r := bufio.NewReader(bytes.NewReader(copyBuffer))
+	return r
 }
 
 func (u *Uring) getCQE() *UringCQE {
