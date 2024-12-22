@@ -2,11 +2,9 @@ package server
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"log/slog"
-	"net/netip"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -242,16 +240,14 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
-func (u *Uring) Accpet(socket *Socket) {
-	u.sockAddr = sockAddr{}
-	u.sockLen = uint32(unsafe.Sizeof(u.sockAddr))
+func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
-		Offset:   uint64(uintptr(unsafe.Pointer(&u.sockLen))),
-		Address:  uint64(uintptr(unsafe.Pointer(&u.sockAddr))),
-		UserData: 1,
+		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
+		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
+		UserData: EVENT_TYPE_ACCEPT,
 	}
 
 	for {
@@ -272,6 +268,11 @@ func (u *Uring) Accpet(socket *Socket) {
 		runtime.Gosched()
 	}
 
+	u.sendSQE()
+
+}
+
+func (u *Uring) sendSQE() {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
@@ -286,60 +287,6 @@ func (u *Uring) Accpet(socket *Socket) {
 		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
-
-	slog.Debug("Block Accpet Operation")
-	res, _, errno = unix.Syscall6(
-		unix.SYS_IO_URING_ENTER,
-		uintptr(u.Fd),
-		0,
-		1,
-		IORING_ENTER_GETEVENTS,
-		0,
-		0)
-	slog.Debug("End Block")
-
-	if res < 0 || errno != 0 {
-		//TODO エラーとして返す
-		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
-		panic(errno)
-	}
-
-	// CQEを取得する
-	for {
-		head, tail := atomic.LoadUint32(u.CQ.Head), atomic.LoadUint32(u.CQ.Tail)
-		if head == tail {
-			slog.Debug("No completion events found, but io_uring_enter did not block")
-			continue
-		}
-
-		if atomic.CompareAndSwapUint32(u.CQ.Head, head, head+1) {
-			cqe := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQEs)), *u.CQ.Entries)
-			cq := cqe[head&*u.CQ.Mask]
-
-			if cq.Res < 0 {
-				err := unix.Errno(cq.Res)
-				slog.DebugContext(context.TODO(), "err", fmt.Sprintf("%s : %s", unix.ErrnoName(err), err.Error()))
-			}
-
-			// IPv4
-			switch u.sockAddr.Family {
-			case unix.AF_INET:
-				port := binary.BigEndian.Uint16(u.sockAddr.Data[0:2])
-				addr := netip.AddrFrom4([4]byte(u.sockAddr.Data[2:6]))
-
-				ip := netip.AddrPortFrom(addr, port)
-
-				peer := Peer{
-					Fd: int32(cq.Res),
-					Ip: ip,
-				}
-
-				u.AccpetChan <- peer
-
-			}
-			break
-		}
-	}
 }
 
 func (u *Uring) WatchRead(peer *Peer) error {
@@ -347,11 +294,12 @@ func (u *Uring) WatchRead(peer *Peer) error {
 	op := UringSQE{
 		Opcode:   IORING_OP_READ,
 		Fd:       peer.Fd,
-		Address:  uint64(uintptr(unsafe.Pointer(&u.Buffer))),
-		UserData: 2,
+		Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
+		Len:      uint32(len(u.Buffer)),
+		UserData: EVENT_TYPE_READ,
 	}
 
-	// TOOD ここのforループを関数化する
+	//TODO ここのforループを関数化する
 	for {
 		tail := atomic.LoadUint32(u.SQ.Tail)
 
@@ -367,15 +315,67 @@ func (u *Uring) WatchRead(peer *Peer) error {
 		runtime.Gosched()
 	}
 
+	u.sendSQE()
+
 	return nil
 }
 
-func (u *Uring) Wait() {
-	// CQEが読み取れるなら読み取る
-	// ノンブロッキング想定なのでブロックはしない
-	for {
+func (u *Uring) Wait() *UringCQE {
+	res, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_ENTER,
+		uintptr(u.Fd),
+		0,
+		1,
+		IORING_ENTER_GETEVENTS,
+		0,
+		0)
 
+	if res < 0 || errno != 0 {
+		//TODO エラーとして返す
+		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
+		panic(errno)
 	}
+
+	cqe := u.getCQE()
+
+	return cqe
+}
+
+func (u *Uring) Read(cqe *UringCQE) []byte {
+	//TODO fixed bufferを使うように変更
+	return u.Buffer[:cqe.Res]
+}
+
+func (u *Uring) getCQE() *UringCQE {
+	for {
+		head, tail := atomic.LoadUint32(u.CQ.Head), atomic.LoadUint32(u.CQ.Tail)
+
+		if head == tail {
+			slog.Debug("No completion events found, but io_uring_enter did not block")
+			break
+		}
+
+		if atomic.CompareAndSwapUint32(u.CQ.Head, head, head+1) {
+			cqes := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQEs)), *u.CQ.Entries)
+			cqe := cqes[head&*u.CQ.Mask]
+
+			if cqe.Res < 0 {
+				err := unix.Errno(cqe.Res)
+				slog.DebugContext(context.TODO(), "err", fmt.Sprintf("%s : %s", unix.ErrnoName(err), err.Error()))
+				return nil
+			}
+
+			return &cqe
+		}
+
+		runtime.Gosched()
+	}
+
+	return nil
+}
+
+func (u *Uring) Close() {
+	unix.Close(int(u.Fd))
 }
 
 type uringParams struct {

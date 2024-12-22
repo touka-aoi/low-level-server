@@ -91,8 +91,7 @@ func (s *Socket) Listen(maxConn int) {
 }
 
 func (s *Socket) Accept(ctx context.Context, maxConnection int) *Socket {
-	uring := CreateUring(uint32(maxConnection))
-	go uring.Accpet(s)
+	//TODO socket accpetの実装
 	return nil
 }
 
