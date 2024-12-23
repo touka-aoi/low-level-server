@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -242,6 +240,14 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
+func (u *Uring) encodeUserData(eventType int, fd *int32) uint64 {
+	return (uint64(eventType) << 32) | uint64(*fd)
+}
+
+func (u *Uring) decodeUserData(userData uint64) (eventType int, fd int32) {
+	return int(userData >> 32), int32(userData & 0xffffffff)
+}
+
 func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
@@ -249,7 +255,7 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 		Fd:       socket.Fd,
 		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
 		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
-		UserData: EVENT_TYPE_ACCEPT,
+		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, &socket.Fd),
 	}
 
 	for {
@@ -298,7 +304,7 @@ func (u *Uring) WatchRead(peer *Peer) error {
 		Fd:       peer.Fd,
 		Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
 		Len:      uint32(len(u.Buffer)),
-		UserData: EVENT_TYPE_READ,
+		UserData: u.encodeUserData(EVENT_TYPE_READ, &peer.Fd),
 	}
 
 	//TODO ここのforループを関数化する
@@ -322,7 +328,7 @@ func (u *Uring) WatchRead(peer *Peer) error {
 	return nil
 }
 
-func (u *Uring) Wait() *UringCQE {
+func (u *Uring) Wait() (int32, int, int32) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
@@ -340,15 +346,17 @@ func (u *Uring) Wait() *UringCQE {
 
 	cqe := u.getCQE()
 
-	return cqe
+	if cqe.Res < 0 {
+		//TODO: error handling
+	}
+
+	eventType, fd := u.decodeUserData(cqe.UserData)
+	return cqe.Res, eventType, fd
 }
 
-func (u *Uring) Read(cqe *UringCQE) *bufio.Reader {
+func (u *Uring) Read(peer *Peer) {
 	//TODO fixed bufferを使うように変更
-	copyBuffer := make([]byte, cqe.Res)
-	copy(copyBuffer, u.Buffer[:cqe.Res])
-	r := bufio.NewReader(bytes.NewReader(copyBuffer))
-	return r
+	copy(peer.Buffer, u.Buffer[:len(peer.Buffer)])
 }
 
 func (u *Uring) getCQE() *UringCQE {

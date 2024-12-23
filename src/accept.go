@@ -9,16 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"os"
 	"unsafe"
 )
 
 const maxConnection = 4096
-
-type Peer struct {
-	Fd int32
-	Ip netip.AddrPort
-}
 
 type Acceptor struct {
 	uring         *Uring
@@ -74,7 +68,16 @@ func (a *Acceptor) watchPeer(peer *Peer) {
 
 func (a *Acceptor) Serve(ctx context.Context) {
 	// ここでサーバーループを回す
-	a.serverLoop(ctx)
+	go a.serverLoop(ctx)
+
+	// ほんとは上の関数をメインで走らせたい
+	<-ctx.Done()
+}
+
+func (a *Acceptor) writeLoop(ctx context.Context) {
+	for writer := range a.writerChan {
+		a.uring.Write(peer, data)
+	}
 }
 
 func (a *Acceptor) serverLoop(ctx context.Context) {
@@ -84,6 +87,7 @@ func (a *Acceptor) serverLoop(ctx context.Context) {
 	a.sockLen = uint32(unsafe.Sizeof(a.sockAddr))
 	//TODO: アクセプトの命令を出すことがわかる関数名 ( 実際にAccpetするわけではない ) PrepareAccept?
 	a.uring.Accpet(a.socket, a.sockAddr, &a.sockLen)
+	peerAcceptor := NewPeerAcceptor()
 
 	slog.InfoContext(ctx, "MainLoop start")
 LOOP:
@@ -94,11 +98,11 @@ LOOP:
 		default:
 
 			//TODO: cqeからデータを受け取ることがわかるもっといい名前
-			cqe := a.uring.Wait()
+			res, eventType, fd := a.uring.Wait()
 			//slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "cqe user data", cqe.UserData, "cqe flags", cqe.Flags)
 
 			// handle eventとして関数化したいな
-			switch cqe.UserData {
+			switch eventType {
 			case EVENT_TYPE_ACCEPT:
 				switch a.sockAddr.Family {
 				case unix.AF_INET:
@@ -108,7 +112,7 @@ LOOP:
 					ip := netip.AddrPortFrom(addr, port)
 
 					peer := &Peer{
-						Fd: int32(cqe.Res),
+						Fd: res,
 						Ip: ip,
 					}
 					slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
@@ -116,12 +120,19 @@ LOOP:
 					if err != nil {
 						slog.ErrorContext(ctx, "WatchRead", "err", err)
 					}
+
+					peerAcceptor.SetPeer(peer.Fd, peer)
 				}
 			case EVENT_TYPE_READ:
-				data := a.uring.Read(cqe)
-				// reacするときにfdを確保していないといけない気がする。というのもwriteもしないといけないのでどうしようといったところだ。
-				//
-				a.HandleData(data)
+				peer := peerAcceptor.GetPeer(fd)
+				// peerが持っているbuffer領域にコピーする
+				peer.Buffer = make([]byte, res)
+				a.uring.Read(peer)
+
+				http.ReadRequest(bufio.NewReader(peer.Buffer))
+
+				//a.HandleData(data)
+				slog.DebugContext(ctx, "Read", "peer", peer)
 			}
 		}
 	}
@@ -130,20 +141,20 @@ LOOP:
 }
 
 func (a *Acceptor) HandleData(r *bufio.Reader) {
-	req, err := http.ReadRequest(r)
-	if err != nil {
-		slog.Error("ReadRequest", "err", err)
-	}
-	slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
-
-	// fdからwriterを作成しないといけない
-	rw := NewBufioResponseWriter()
-	mux := http.NewServeMux()
-	mux.ServeHTTP(rw, req)
-
-	if err := a.writer.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
-	}
+	//req, err := http.ReadRequest(r)
+	//if err != nil {
+	//	slog.Error("ReadRequest", "err", err)
+	//}
+	//slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
+	//
+	//// fdからwriterを作成しないといけない
+	//rw := NewBufioResponseWriter()
+	//mux := http.NewServeMux()
+	//mux.ServeHTTP(rw, req)
+	//
+	//if err := a.writer.Flush(); err != nil {
+	//	fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
+	//}
 }
 
 type bufioResponseWriter struct {
