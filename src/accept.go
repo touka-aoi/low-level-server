@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"log/slog"
 	"net/http"
 	"net/netip"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 const maxConnection = 4096
@@ -21,6 +22,7 @@ type Acceptor struct {
 	sockAddr      *sockAddr
 	sockLen       uint32
 	maxConnection int
+	writeChan     chan *Peer
 }
 
 // TODO: touka-aoi change the name
@@ -32,6 +34,7 @@ func NewAcceptor() *Acceptor {
 		socket:        socket,
 		uring:         uring,
 		maxConnection: maxConnection,
+		writeChan:     make(chan *Peer, 1<<20),
 	}
 }
 
@@ -52,32 +55,12 @@ func (a *Acceptor) Listen(address string) error {
 	return nil
 }
 
-func (a *Acceptor) Accept(ctx context.Context) {
-	//for peer := range a.AcceptChan {
-	//	// io-uring で read する待機列に入れる
-	//	//a.watchPeer(&peer)
-	//}
-}
-
-func (a *Acceptor) watchPeer(peer *Peer) {
-	err := a.uring.WatchRead(peer)
-	if err != nil {
-		slog.Debug("WatchRead", "err", err)
-	}
-}
-
 func (a *Acceptor) Serve(ctx context.Context) {
 	// ここでサーバーループを回す
 	go a.serverLoop(ctx)
 
 	// ほんとは上の関数をメインで走らせたい
 	<-ctx.Done()
-}
-
-func (a *Acceptor) writeLoop(ctx context.Context) {
-	for writer := range a.writerChan {
-		a.uring.Write(peer, data)
-	}
 }
 
 func (a *Acceptor) serverLoop(ctx context.Context) {
@@ -95,7 +78,19 @@ LOOP:
 		select {
 		case <-ctx.Done():
 			break LOOP
+
 		default:
+
+		LOOP2:
+			for {
+				select {
+				case writer := <-a.writeChan:
+					//TODO: 一度に複数のデータをopに変換してSQを一度だけ呼び出す
+					a.uring.Write(writer.Fd, writer.Buffer)
+				default:
+					break LOOP2
+				}
+			}
 
 			//TODO: cqeからデータを受け取ることがわかるもっといい名前
 			res, eventType, fd := a.uring.Wait()
@@ -112,11 +107,12 @@ LOOP:
 					ip := netip.AddrPortFrom(addr, port)
 
 					peer := &Peer{
-						Fd: res,
-						Ip: ip,
+						Fd:        res,
+						Ip:        ip,
+						writeChan: a.writeChan,
 					}
 					slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
-					err := a.uring.WatchRead(peer)
+					err := a.watchPeer(peer)
 					if err != nil {
 						slog.ErrorContext(ctx, "WatchRead", "err", err)
 					}
@@ -126,13 +122,25 @@ LOOP:
 			case EVENT_TYPE_READ:
 				peer := peerAcceptor.GetPeer(fd)
 				// peerが持っているbuffer領域にコピーする
-				peer.Buffer = make([]byte, res)
-				a.uring.Read(peer)
+				buffer := make([]byte, res)
+				a.uring.Read(buffer)
+				peer.Buffer = buffer
+				req, err := http.ReadRequest(bufio.NewReader(peer))
+				if err != nil {
+					slog.Error("ReadRequest", "err", err)
+				}
+				slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
 
-				http.ReadRequest(bufio.NewReader(peer.Buffer))
+				// 200 OK を返す
+				body := "hello! I'm go server !"
+				contentLen := len(body)
+				response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", contentLen, body)
+				peer.Write([]byte(response))
+				//slog.InfoContext(ctx, "Write", "peer", peer, "res", res)
 
-				//a.HandleData(data)
-				slog.DebugContext(ctx, "Read", "peer", peer)
+			case EVENT_TYPE_WRITE:
+				peer := peerAcceptor.GetPeer(fd)
+				slog.ErrorContext(ctx, "Write", "peer", peer, "res", res)
 			}
 		}
 	}
@@ -157,39 +165,48 @@ func (a *Acceptor) HandleData(r *bufio.Reader) {
 	//}
 }
 
-type bufioResponseWriter struct {
-	writer      *bufio.Writer
-	headers     http.Header
-	status      int
-	wroteHeader bool
-}
-
-func NewBufioResponseWriter(w *bufio.Writer) *bufioResponseWriter {
-	return &bufioResponseWriter{
-		writer:  w,
-		headers: make(http.Header),
-		status:  http.StatusOK,
+func (a *Acceptor) watchPeer(peer *Peer) error {
+	err := a.uring.WatchRead(peer.Fd)
+	if err != nil {
+		return err
 	}
+
+	return nil
 }
 
-func (w *bufioResponseWriter) Header() http.Header {
-	return w.headers
-}
+// type bufioResponseWriter struct {
+// 	writer      *bufio.Writer
+// 	headers     http.Header
+// 	status      int
+// 	wroteHeader bool
+// }
 
-func (w *bufioResponseWriter) Write(data []byte) (int, error) {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.writer.Write(data)
-}
+// func NewBufioResponseWriter(w *bufio.Writer) *bufioResponseWriter {
+// 	return &bufioResponseWriter{
+// 		writer:  w,
+// 		headers: make(http.Header),
+// 		status:  http.StatusOK,
+// 	}
+// }
 
-func (w *bufioResponseWriter) WriteHeader(statusCode int) {
-	if w.wroteHeader {
-		return
-	}
-	w.status = statusCode
-	fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", w.status, http.StatusText(w.status))
-	w.headers.Write(w.writer)
-	w.writer.WriteString("\r\n")
-	w.wroteHeader = true
-}
+// func (w *bufioResponseWriter) Header() http.Header {
+// 	return w.headers
+// }
+
+// func (w *bufioResponseWriter) Write(data []byte) (int, error) {
+// 	if !w.wroteHeader {
+// 		w.WriteHeader(http.StatusOK)
+// 	}
+// 	return w.writer.Write(data)
+// }
+
+// func (w *bufioResponseWriter) WriteHeader(statusCode int) {
+// 	if w.wroteHeader {
+// 		return
+// 	}
+// 	w.status = statusCode
+// 	fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", w.status, http.StatusText(w.status))
+// 	w.headers.Write(w.writer)
+// 	w.writer.WriteString("\r\n")
+// 	w.wroteHeader = true
+// }

@@ -24,7 +24,7 @@ func main() {
 
 	s := server.NewAcceptor()
 	defer s.Close()
-	err := s.Listen("127.0.0.1:8081")
+	err := s.Listen("127.0.0.1:8080")
 	if err != nil {
 		slog.DebugContext(ctx, "Listen", "err", err)
 	}

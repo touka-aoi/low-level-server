@@ -98,6 +98,16 @@ const (
 	IORING_OP_LAST
 )
 
+const (
+	IOSQE_FIXED_FILE = 1 << iota
+	IOSQE_IO_DRAIN
+	IOSQE_IO_LINK
+	IOSQE_IO_HARDLINK
+	IOSQE_ASYNC
+	IOSQE_BUFFER_SELECT
+	IOSQE_CQE_SKIP_SUCCESS
+)
+
 // accept flags stored in sqe->ioprio
 // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 const (
@@ -240,8 +250,8 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
-func (u *Uring) encodeUserData(eventType int, fd *int32) uint64 {
-	return (uint64(eventType) << 32) | uint64(*fd)
+func (u *Uring) encodeUserData(eventType int, fd int32) uint64 {
+	return (uint64(eventType) << 32) | uint64(fd)
 }
 
 func (u *Uring) decodeUserData(userData uint64) (eventType int, fd int32) {
@@ -255,7 +265,7 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 		Fd:       socket.Fd,
 		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
 		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
-		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, &socket.Fd),
+		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
 	for {
@@ -297,14 +307,44 @@ func (u *Uring) sendSQE() {
 	}
 }
 
-func (u *Uring) WatchRead(peer *Peer) error {
+func (u *Uring) Write(fd int32, buffer []byte) {
+	//TOOD: 成功時はCQEを返さない
+	op := UringSQE{
+		Opcode:   IORING_OP_WRITE,
+		Fd:       fd,
+		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
+		Flags:    IOSQE_CQE_SKIP_SUCCESS,
+		Len:      uint32(len(buffer)),
+		UserData: u.encodeUserData(EVENT_TYPE_WRITE, fd),
+	}
+
+	for {
+		tail := atomic.LoadUint32(u.SQ.Tail)
+
+		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
+			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
+			sqe[tail&*u.SQ.Mask] = op
+
+			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
+			array[tail&*u.SQ.Mask] = tail
+
+			break
+		}
+		runtime.Gosched()
+	}
+
+	u.sendSQE()
+}
+
+func (u *Uring) WatchRead(fd int32) error {
+	//TOOD: リングバッファへの移行
 	u.Buffer = make([]byte, 1024)
 	op := UringSQE{
 		Opcode:   IORING_OP_READ,
-		Fd:       peer.Fd,
+		Fd:       fd,
 		Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
 		Len:      uint32(len(u.Buffer)),
-		UserData: u.encodeUserData(EVENT_TYPE_READ, &peer.Fd),
+		UserData: u.encodeUserData(EVENT_TYPE_READ, fd),
 	}
 
 	//TODO ここのforループを関数化する
@@ -354,9 +394,9 @@ func (u *Uring) Wait() (int32, int, int32) {
 	return cqe.Res, eventType, fd
 }
 
-func (u *Uring) Read(peer *Peer) {
+func (u *Uring) Read(buffer []byte) {
 	//TODO fixed bufferを使うように変更
-	copy(peer.Buffer, u.Buffer[:len(peer.Buffer)])
+	copy(buffer, u.Buffer[:len(buffer)])
 }
 
 func (u *Uring) getCQE() *UringCQE {

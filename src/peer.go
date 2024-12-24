@@ -5,9 +5,21 @@ import (
 )
 
 type Peer struct {
-	Fd     int32
-	Ip     netip.AddrPort
-	Buffer []byte
+	Fd        int32
+	Ip        netip.AddrPort
+	Buffer    []byte
+	writeChan chan *Peer
+}
+
+func (p *Peer) Read(b []byte) (int, error) {
+	copy(b, p.Buffer)
+	return len(p.Buffer), nil
+}
+
+func (p *Peer) Write(b []byte) (int, error) {
+	p.Buffer = b
+	p.writeChan <- p
+	return len(b), nil
 }
 
 const maxOSFileDescriptor = 1 << 20
