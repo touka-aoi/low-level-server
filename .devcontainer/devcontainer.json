@@ -1,0 +1,8 @@
+{
+    "extensions": [
+        "golang.go",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "EditorConfig.EditorConfig"
+    ],
+}
