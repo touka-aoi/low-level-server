@@ -101,4 +101,5 @@ func (s *Socket) Close() error {
 		//MEMO: touka-aoi errono型を返すのが正しいのか考えたい
 		return errno
 	}
+  return nil
 }

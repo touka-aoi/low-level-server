@@ -4,6 +4,8 @@ import (
 	"net/netip"
 )
 
+const maxOSFileDescriptor = 1 << 20
+
 type Peer struct {
 	Fd        int32
 	Ip        netip.AddrPort
@@ -21,8 +23,6 @@ func (p *Peer) Write(b []byte) (int, error) {
 	p.writeChan <- p
 	return len(b), nil
 }
-
-const maxOSFileDescriptor = 1 << 20
 
 type PeerAcceptor [maxOSFileDescriptor]*Peer
 
