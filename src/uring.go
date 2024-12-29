@@ -1,15 +1,16 @@
 package server
 
 import (
-	"context"
-	"fmt"
-	"log"
 	"log/slog"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+)
+
+const (
+	Pagesize = 4096
 )
 
 const (
@@ -120,6 +121,11 @@ const (
 	IORING_FEAT_SINGLE_MMAP = 1 << 0
 )
 
+// https://github.com/axboe/liburing/blob/c5eead2659ef5ea86ef8c78410fa42d9bea976c9/src/include/liburing/io_uring.h#L565
+const (
+	IORING_REGISTER_PBUF_RING = 22
+)
+
 type UringSQE struct {
 	Opcode      uint8
 	Flags       uint8
@@ -150,6 +156,8 @@ type Uring struct {
 	sockLen    uint32
 	AccpetChan chan Peer
 	Buffer     []byte
+	PBufRing   []byte
+	pBufRing   []byte // 使用しない GC対策
 }
 
 type SQ struct {
@@ -183,7 +191,7 @@ func CreateUring(entries uint32) *Uring {
 		0)
 
 	if errno != 0 {
-		log.Printf("IO_URING_SETUP failed with errno: %d (%s)", errno, errno.Error())
+		slog.Error("IO_URING_SETUP failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 
@@ -196,7 +204,7 @@ func CreateUring(entries uint32) *Uring {
 	)
 
 	if err != nil {
-		log.Printf("Mmap failed with errno: %d (%s)", err, err.Error())
+		slog.Error("Mmap failed", "err", err, "errno", err.Error())
 		panic(err)
 	}
 
@@ -213,7 +221,7 @@ func CreateUring(entries uint32) *Uring {
 	SQEPtr := uintptr(unsafe.Pointer(unsafe.SliceData(SQEData)))
 
 	if err != nil {
-		log.Printf("Mmap failed with errno: %d (%s)", err, err.Error())
+		slog.Error("Mmap failed", "err", err, "errno", err.Error())
 		panic(err)
 	}
 
@@ -247,6 +255,42 @@ func CreateUring(entries uint32) *Uring {
 	}
 
 	return uring
+
+}
+
+// int io_uring_register(unsigned int fd, unsigned int opcode,
+//
+//	void *arg, unsigned int nr_args);
+func (u *Uring) RegisterRingBuffer(id int) {
+	// maxConnectionは外部から注入できた方がいいね
+	size := maxConnection * int(unsafe.Sizeof(uringBuf{}))
+	p := make([]byte, size+Pagesize-1)
+	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
+	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
+	s := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size)
+
+	u.PBufRing = s
+	u.pBufRing = p
+
+	reg := uringBufReg{
+		RingAddr:    uint64(ptr),
+		RingEntries: uint32(maxConnection),
+    Bgid:        uint16(id),
+	}
+
+	res, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_REGISTER,
+		uintptr(u.Fd),
+		IORING_REGISTER_PBUF_RING,
+		uintptr(unsafe.Pointer(&reg)),
+		0,
+		0,
+		0)
+
+	if res < 0 {
+		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
+		panic(errno)
+	}
 
 }
 
@@ -302,7 +346,7 @@ func (u *Uring) sendSQE() {
 
 	if res < 0 || errno != 0 {
 		//TODO エラーとして返す
-		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
+		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 }
@@ -380,7 +424,7 @@ func (u *Uring) Wait() (int32, int, int32) {
 
 	if res < 0 || errno != 0 {
 		//TODO エラーとして返す
-		log.Printf("Uring failed with errno: %d (%s)", errno, errno.Error())
+		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 
@@ -414,7 +458,7 @@ func (u *Uring) getCQE() *UringCQE {
 
 			if cqe.Res < 0 {
 				err := unix.Errno(cqe.Res)
-				slog.DebugContext(context.TODO(), "err", fmt.Sprintf("%s : %s", unix.ErrnoName(err), err.Error()))
+				slog.Error("CQE failed", "errno", unix.ErrnoName(err), "err", err.Error())
 				return nil
 			}
 
@@ -466,4 +510,19 @@ type cqOffsets struct {
 	Flags       uint32
 	Resv1       uint32
 	UserAddr    uint64
+}
+
+type uringBufReg struct {
+	RingAddr    uint64
+	RingEntries uint32
+	Bgid        uint16
+	Pad         uint16
+	Resv        [3]uint64
+}
+
+type uringBuf struct {
+	Addr uint64
+	Len  uint32
+	Bid  uint16
+	Resv uint16
 }
