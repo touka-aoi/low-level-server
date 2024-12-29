@@ -95,7 +95,10 @@ func (s *Socket) Accept(ctx context.Context, maxConnection int) *Socket {
 	return nil
 }
 
-func (s *Socket) Close() {
-	//TODO: unix syscall6 に変更する
-	unix.Close(int(s.Fd))
+func (s *Socket) Close() error {
+	res, _, errno := unix.Syscall6(unix.SYS_CLOSE, uintptr(s.Fd), 0, 0, 0, 0, 0)
+	if res != 0 {
+		//MEMO: touka-aoi errono型を返すのが正しいのか考えたい
+		return errno
+	}
 }
