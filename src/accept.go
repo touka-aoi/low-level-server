@@ -31,8 +31,8 @@ func NewAcceptor() *Acceptor {
 	//TODO: touka-aoi add error handling to CreateSocket
 	socket := CreateSocket()
 	uring := CreateUring(maxConnection)
-  uring.RegisterRingBuffer(1)
-	return &Acceptor
+	uring.RegisterRingBuffer(1)
+	return &Acceptor{
 		socket:        socket,
 		uring:         uring,
 		maxConnection: maxConnection,
