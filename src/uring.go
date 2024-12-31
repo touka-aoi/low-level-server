@@ -149,16 +149,16 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd           int32
-	SQ           SQ
-	CQ           CQ
-	sockAddr     sockAddr
-	sockLen      uint32
-	AccpetChan   chan Peer
-	Buffer       []byte
-	PBufRing     []byte
-	pBufRing     []byte // 使用しない GC対策
-	AcceptBuffer []byte
+	Fd            int32
+	SQ            SQ
+	CQ            CQ
+	sockAddr      sockAddr
+	sockLen       uint32
+	AccpetChan    chan Peer
+	Buffer        []byte
+	PBufRing      []byte
+	pBufRingUnuse []byte // 使用しない GC対策
+	AcceptBuffer  []byte
 }
 
 type SQ struct {
@@ -264,16 +264,14 @@ func CreateUring(entries uint32) *Uring {
 //	void *arg, unsigned int nr_args);
 func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	// maxConnectionは外部から注入できた方がいいね
-	size := maxConnection * int(unsafe.Sizeof(uringBufRing{}))
+	size := maxConnection * int(unsafe.Sizeof(uringBuf{}))
 	p := make([]byte, size+Pagesize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
 	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
 	s := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size)
 
 	u.PBufRing = s
-	u.pBufRing = p
-
-	// buf := &uringBufRing{}
+	u.pBufRingUnuse = p
 
 	reg := &uringBufReg{
 		RingAddr:    uint64(ptr),
@@ -294,16 +292,27 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
-	//MEMO: liburingではtail=0にしているがuringBufRing->uringBuf->Resv(tail)(union)では初期化時に0なので不要
+
+	u.AcceptBuffer = make([]byte, maxConnection*unsafe.Sizeof(sockAddr{}))
+	buffShift := unsafe.Sizeof(sockAddr{})
 
 	for i := 0; i < maxConnection; i++ {
 		// スライスを取得
-    buf := unsafe.Slice((*uringBuf)(unsafe.Pointer(ptr)), maxConnection)
-		// uringbufにキャスト
-    buf := (*uringBuf)(unsafe.Pointer(ptr))
-		// 設定する
-    
+		b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[i*int(unsafe.Sizeof(uringBuf{}))]))
+		b.Addr = uint64(uintptr(unsafe.Pointer(&u.AcceptBuffer[i*int(buffShift)])))
+		b.Bid = uint16(i)
+		b.Len = uint32(buffShift)
 	}
+
+	//MEMO: liburingではtail=0にしているがuringBufRing->uringBuf->Resv(tail)(union)では初期化時に0なので不要
+
+	// for i := 0; i < maxConnection; i++ {
+	// 	// スライスを取得
+	// 	buf := u.PBufRing[i]
+	// 	// uringbufにキャスト
+	// 	// 設定する
+
+	// }
 
 	// buffer := make([]byte, maxConnection*16)
 	// u.AcceptBuffer = buffer
@@ -354,6 +363,8 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	// 	slog.Error("io-uring register provide buffer failed", "cqe", cqe)
 	// }
 
+	slog.Info("io-uring register provide buffer success")
+
 }
 
 func (u *Uring) encodeUserData(eventType int, fd int32) uint64 {
@@ -369,11 +380,11 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 		Opcode: IORING_OP_ACCEPT,
 		Ioprio: IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:     socket.Fd,
-		// Flags:  IOSQE_BUFFER_SELECT,
-		Offset:  uint64(uintptr(unsafe.Pointer(sockLen))),
-		Address: uint64(uintptr(unsafe.Pointer(sockAddr))),
+		Flags:  IOSQE_BUFFER_SELECT,
+		// Offset:  uint64(uintptr(unsafe.Pointer(sockLen))),
+		// Address: uint64(uintptr(unsafe.Pointer(sockAddr))),
 		// BufIndex: 1,
-		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
+		// UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
 	for {
@@ -394,7 +405,27 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 		runtime.Gosched()
 	}
 
-	u.sendSQE()
+	res, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_ENTER,
+		uintptr(u.Fd),
+		1,
+		1,
+		IORING_ENTER_GETEVENTS,
+		0,
+		0)
+
+	if res < 0 || errno != 0 {
+		//TODO エラーとして返す
+		slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
+		panic(errno)
+	}
+
+	cqe := u.getCQE()
+
+	if cqe.Res < 0 {
+		slog.Error("io-uring register provide buffer failed", "cqe", cqe)
+	}
+	// u.sendSQE()
 }
 
 func (u *Uring) sendSQE() {
@@ -522,7 +553,7 @@ func (u *Uring) getCQE() *UringCQE {
 			if cqe.Res < 0 {
 				//MEMO: < 0 のときは-1をかけて正の値にしてあげる
 				err := unix.Errno(-cqe.Res)
-				slog.Error("CQE failed", "errno", unix.ErrnoName(err), "err", err.Error())
+				slog.Error("CQE failed", "errno", unix.ErrnoName(err), "err", err.Error(), "errno", cqe.Res)
 				return nil
 			}
 
@@ -584,6 +615,7 @@ type uringBufReg struct {
 	Resv        [3]uint64
 }
 
+// 16バイト
 type uringBuf struct {
 	Addr uint64
 	Len  uint32
