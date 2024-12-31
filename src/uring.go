@@ -149,15 +149,16 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd         int32
-	SQ         SQ
-	CQ         CQ
-	sockAddr   sockAddr
-	sockLen    uint32
-	AccpetChan chan Peer
-	Buffer     []byte
-	PBufRing   []byte
-	pBufRing   []byte // 使用しない GC対策
+	Fd           int32
+	SQ           SQ
+	CQ           CQ
+	sockAddr     sockAddr
+	sockLen      uint32
+	AccpetChan   chan Peer
+	Buffer       []byte
+	PBufRing     []byte
+	pBufRing     []byte // 使用しない GC対策
+	AcceptBuffer []byte
 }
 
 type SQ struct {
@@ -261,9 +262,9 @@ func CreateUring(entries uint32) *Uring {
 // int io_uring_register(unsigned int fd, unsigned int opcode,
 //
 //	void *arg, unsigned int nr_args);
-func (u *Uring) RegisterRingBuffer(id int) {
+func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	// maxConnectionは外部から注入できた方がいいね
-	size := maxConnection * int(unsafe.Sizeof(uringBuf{}))
+	size := maxConnection * int(unsafe.Sizeof(uringBufRing{}))
 	p := make([]byte, size+Pagesize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
 	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
@@ -272,18 +273,20 @@ func (u *Uring) RegisterRingBuffer(id int) {
 	u.PBufRing = s
 	u.pBufRing = p
 
-	reg := uringBufReg{
+	// buf := &uringBufRing{}
+
+	reg := &uringBufReg{
 		RingAddr:    uint64(ptr),
 		RingEntries: uint32(maxConnection),
-    Bgid:        uint16(id),
+		Bgid:        uint16(bufferGroupID),
 	}
 
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_REGISTER,
 		uintptr(u.Fd),
 		IORING_REGISTER_PBUF_RING,
-		uintptr(unsafe.Pointer(&reg)),
-		0,
+		uintptr(unsafe.Pointer(reg)),
+		1,
 		0,
 		0)
 
@@ -291,6 +294,65 @@ func (u *Uring) RegisterRingBuffer(id int) {
 		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
+	//MEMO: liburingではtail=0にしているがuringBufRing->uringBuf->Resv(tail)(union)では初期化時に0なので不要
+
+	for i := 0; i < maxConnection; i++ {
+		// スライスを取得
+    buf := unsafe.Slice((*uringBuf)(unsafe.Pointer(ptr)), maxConnection)
+		// uringbufにキャスト
+    buf := (*uringBuf)(unsafe.Pointer(ptr))
+		// 設定する
+    
+	}
+
+	// buffer := make([]byte, maxConnection*16)
+	// u.AcceptBuffer = buffer
+
+	// // io-uringに登録
+	// op := UringSQE{
+	// 	Opcode:   IORING_OP_PROVIDE_BUFFERS,
+	// 	Fd:       -1,
+	// 	Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.AcceptBuffer)))),
+	// 	Len:      uint32(16 * maxConnection),
+	// 	BufIndex: uint16(bufferGroupID),
+	// 	Offset:   0,
+	// }
+
+	// for {
+	// 	tail := atomic.LoadUint32(u.SQ.Tail)
+
+	// 	if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
+	// 		sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
+	// 		sqe[tail&*u.SQ.Mask] = op
+
+	// 		array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
+	// 		array[tail&*u.SQ.Mask] = tail
+
+	// 		break
+	// 	}
+	// 	runtime.Gosched()
+	// }
+
+	// res, _, errno = unix.Syscall6(
+	// 	unix.SYS_IO_URING_ENTER,
+	// 	uintptr(u.Fd),
+	// 	1,
+	// 	1,
+	// 	IORING_ENTER_GETEVENTS,
+	// 	0,
+	// 	0)
+
+	// if res < 0 || errno != 0 {
+	// 	//TODO エラーとして返す
+	// 	slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
+	// 	panic(errno)
+	// }
+
+	// cqe := u.getCQE()
+
+	// if cqe.Res < 0 {
+	// 	slog.Error("io-uring register provide buffer failed", "cqe", cqe)
+	// }
 
 }
 
@@ -304,11 +366,13 @@ func (u *Uring) decodeUserData(userData uint64) (eventType int, fd int32) {
 
 func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
-		Opcode:   IORING_OP_ACCEPT,
-		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
-		Fd:       socket.Fd,
-		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
-		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
+		Opcode: IORING_OP_ACCEPT,
+		Ioprio: IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
+		Fd:     socket.Fd,
+		// Flags:  IOSQE_BUFFER_SELECT,
+		Offset:  uint64(uintptr(unsafe.Pointer(sockLen))),
+		Address: uint64(uintptr(unsafe.Pointer(sockAddr))),
+		// BufIndex: 1,
 		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
@@ -331,7 +395,6 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	}
 
 	u.sendSQE()
-
 }
 
 func (u *Uring) sendSQE() {
@@ -457,7 +520,8 @@ func (u *Uring) getCQE() *UringCQE {
 			cqe := cqes[head&*u.CQ.Mask]
 
 			if cqe.Res < 0 {
-				err := unix.Errno(cqe.Res)
+				//MEMO: < 0 のときは-1をかけて正の値にしてあげる
+				err := unix.Errno(-cqe.Res)
 				slog.Error("CQE failed", "errno", unix.ErrnoName(err), "err", err.Error())
 				return nil
 			}
@@ -525,4 +589,8 @@ type uringBuf struct {
 	Len  uint32
 	Bid  uint16
 	Resv uint16
+}
+
+type uringBufRing struct {
+	uringBuf []uringBuf
 }
