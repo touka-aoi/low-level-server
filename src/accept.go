@@ -96,13 +96,17 @@ LOOP:
 
 			//TODO: cqeからデータを受け取ることがわかるもっといい名前
 			res, eventType, fd := a.uring.Wait()
-			//slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "cqe user data", cqe.UserData, "cqe flags", cqe.Flags)
+			slog.InfoContext(ctx, "CQE", "cqe res", res, "event Type", eventType, "fd", fd)
 
 			// handle eventとして関数化したいな
 			switch eventType {
 			case EVENT_TYPE_ACCEPT:
 				// IORING_CQE_F_MOREフラグをチェクし、何か問題が起きていないか確認する
 				// 問題が起きていた場合、再度Accpet_MultiShotを行う
+				s, err := unix.Getpeername(int(fd))
+				if err != nil {
+
+				}
 
 				switch a.sockAddr.Family {
 				case unix.AF_INET:

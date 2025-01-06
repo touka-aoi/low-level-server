@@ -377,14 +377,12 @@ func (u *Uring) decodeUserData(userData uint64) (eventType int, fd int32) {
 
 func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
-		Opcode: IORING_OP_ACCEPT,
-		Ioprio: IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
-		Fd:     socket.Fd,
-		Flags:  IOSQE_BUFFER_SELECT,
-		// Offset:  uint64(uintptr(unsafe.Pointer(sockLen))),
-		// Address: uint64(uintptr(unsafe.Pointer(sockAddr))),
-		// BufIndex: 1,
-		// UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
+		Opcode:   IORING_OP_ACCEPT,
+		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore  .kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
+		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
+		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
+		Fd:       socket.Fd,
+		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
 	for {
@@ -405,27 +403,8 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 		runtime.Gosched()
 	}
 
-	res, _, errno := unix.Syscall6(
-		unix.SYS_IO_URING_ENTER,
-		uintptr(u.Fd),
-		1,
-		1,
-		IORING_ENTER_GETEVENTS,
-		0,
-		0)
+	u.sendSQE()
 
-	if res < 0 || errno != 0 {
-		//TODO エラーとして返す
-		slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
-		panic(errno)
-	}
-
-	cqe := u.getCQE()
-
-	if cqe.Res < 0 {
-		slog.Error("io-uring register provide buffer failed", "cqe", cqe)
-	}
-	// u.sendSQE()
 }
 
 func (u *Uring) sendSQE() {
