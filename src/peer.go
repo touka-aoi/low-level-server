@@ -34,6 +34,6 @@ func (p *PeerAcceptor) GetPeer(fd int32) *Peer {
 	return p[fd&maxOSFileDescriptor]
 }
 
-func (p *PeerAcceptor) SetPeer(fd int32, peer *Peer) {
+func (p *PeerAcceptor) RegisterPeer(fd int32, peer *Peer) {
 	p[fd&maxOSFileDescriptor] = peer
 }

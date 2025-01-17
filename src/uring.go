@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	Pagesize = 4096
+	Pagesize      = 4096
+	MaxBufferSize = 20 * 1024
 )
 
 const (
@@ -259,12 +260,9 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
-// int io_uring_register(unsigned int fd, unsigned int opcode,
-//
-//	void *arg, unsigned int nr_args);
 func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	// maxConnectionは外部から注入できた方がいいね
-	size := maxConnection * int(unsafe.Sizeof(uringBuf{}))
+	size := maxConnection * int(unsafe.Sizeof(uringBufReg{}))
 	p := make([]byte, size+Pagesize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
 	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
@@ -293,75 +291,69 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 		panic(errno)
 	}
 
-	u.AcceptBuffer = make([]byte, maxConnection*unsafe.Sizeof(sockAddr{}))
-	buffShift := unsafe.Sizeof(sockAddr{})
-
+	// uringBufRingとして扱う
+	uringBufRing := make([]byte, maxConnection*MaxBufferSize)
 	for i := 0; i < maxConnection; i++ {
-		// スライスを取得
 		b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[i*int(unsafe.Sizeof(uringBuf{}))]))
-		b.Addr = uint64(uintptr(unsafe.Pointer(&u.AcceptBuffer[i*int(buffShift)])))
+		b.Addr = uint64(uintptr(unsafe.Pointer(&uringBufRing[i*int(MaxBufferSize)])))
 		b.Bid = uint16(i)
-		b.Len = uint32(buffShift)
+		b.Len = uint32(MaxBufferSize)
 	}
+	u.AcceptBuffer = uringBufRing
 
-	//MEMO: liburingではtail=0にしているがuringBufRing->uringBuf->Resv(tail)(union)では初期化時に0なので不要
+	// ここにメモリバリアを設置したい
+	b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[0]))
+	b.Resv = maxConnection
 
-	// for i := 0; i < maxConnection; i++ {
-	// 	// スライスを取得
-	// 	buf := u.PBufRing[i]
-	// 	// uringbufにキャスト
-	// 	// 設定する
+	// 先頭のtailをmaxConnectionに設定
 
-	// }
+	// PBUFにおいて、PROVIDE_BUFFERSは必要ない
 
-	// buffer := make([]byte, maxConnection*16)
-	// u.AcceptBuffer = buffer
-
-	// // io-uringに登録
-	// op := UringSQE{
-	// 	Opcode:   IORING_OP_PROVIDE_BUFFERS,
-	// 	Fd:       -1,
-	// 	Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.AcceptBuffer)))),
-	// 	Len:      uint32(16 * maxConnection),
-	// 	BufIndex: uint16(bufferGroupID),
-	// 	Offset:   0,
-	// }
-
-	// for {
-	// 	tail := atomic.LoadUint32(u.SQ.Tail)
-
-	// 	if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
-	// 		sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
-	// 		sqe[tail&*u.SQ.Mask] = op
-
-	// 		array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
-	// 		array[tail&*u.SQ.Mask] = tail
-
-	// 		break
-	// 	}
-	// 	runtime.Gosched()
-	// }
-
-	// res, _, errno = unix.Syscall6(
-	// 	unix.SYS_IO_URING_ENTER,
-	// 	uintptr(u.Fd),
-	// 	1,
-	// 	1,
-	// 	IORING_ENTER_GETEVENTS,
-	// 	0,
-	// 	0)
-
-	// if res < 0 || errno != 0 {
-	// 	//TODO エラーとして返す
-	// 	slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
-	// 	panic(errno)
-	// }
-
-	// cqe := u.getCQE()
-
-	// if cqe.Res < 0 {
-	// 	slog.Error("io-uring register provide buffer failed", "cqe", cqe)
-	// }
+	//// io-uringに登録
+	//op := UringSQE{
+	//	Opcode:   IORING_OP_PROVIDE_BUFFERS,
+	//	Fd:       maxConnection,
+	//	Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.AcceptBuffer)))),
+	//	Len:      uint32(MaxBufferSize),
+	//	BufIndex: uint16(bufferGroupID),
+	//	Offset:   0,
+	//}
+	//
+	//for {
+	//	tail := atomic.LoadUint32(u.SQ.Tail)
+	//
+	//	if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
+	//		sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
+	//		sqe[tail&*u.SQ.Mask] = op
+	//
+	//		array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
+	//		array[tail&*u.SQ.Mask] = tail
+	//
+	//		break
+	//	}
+	//	runtime.Gosched()
+	//}
+	//
+	//res, _, errno = unix.Syscall6(
+	//	unix.SYS_IO_URING_ENTER,
+	//	uintptr(u.Fd),
+	//	1,
+	//	1,
+	//	IORING_ENTER_GETEVENTS,
+	//	0,
+	//	0)
+	//
+	//if res < 0 || errno != 0 {
+	//	//TODO エラーとして返す
+	//	slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
+	//	panic(errno)
+	//}
+	//
+	//cqe := u.getCQE()
+	//
+	//if cqe.Res < 0 {
+	//	slog.Error("io-uring register provide buffer failed", "cqe", cqe)
+	//}
 
 	slog.Info("io-uring register provide buffer success")
 
@@ -379,8 +371,6 @@ func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore  .kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
-		Offset:   uint64(uintptr(unsafe.Pointer(sockLen))),
-		Address:  uint64(uintptr(unsafe.Pointer(sockAddr))),
 		Fd:       socket.Fd,
 		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
@@ -454,13 +444,12 @@ func (u *Uring) Write(fd int32, buffer []byte) {
 }
 
 func (u *Uring) WatchRead(fd int32) error {
-	//TOOD: リングバッファへの移行
-	u.Buffer = make([]byte, 1024)
 	op := UringSQE{
-		Opcode:   IORING_OP_READ,
-		Fd:       fd,
-		Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
-		Len:      uint32(len(u.Buffer)),
+		Opcode: IORING_OP_READ,
+		Fd:     fd,
+		Flags:  IOSQE_BUFFER_SELECT,
+		//Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
+		//Len:      uint32(len(u.Buffer)),
 		UserData: u.encodeUserData(EVENT_TYPE_READ, fd),
 	}
 
@@ -602,6 +591,6 @@ type uringBuf struct {
 	Resv uint16
 }
 
-type uringBufRing struct {
-	uringBuf []uringBuf
-}
+//type uringBufRing struct {
+//	uringBuf []uringBuf
+//}

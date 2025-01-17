@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -95,25 +94,25 @@ LOOP:
 			}
 
 			//TODO: cqeからデータを受け取ることがわかるもっといい名前
-			res, eventType, fd := a.uring.Wait()
-			slog.InfoContext(ctx, "CQE", "cqe res", res, "event Type", eventType, "fd", fd)
+			res, eventType, sourceFd := a.uring.Wait()
+			slog.InfoContext(ctx, "CQE", "cqe res", res, "event Type", eventType, "fd", sourceFd)
 
 			// handle eventとして関数化したいな
 			switch eventType {
 			case EVENT_TYPE_ACCEPT:
-				// IORING_CQE_F_MOREフラグをチェクし、何か問題が起きていないか確認する
-				// 問題が起きていた場合、再度Accpet_MultiShotを行う
-				s, err := unix.Getpeername(int(fd))
+				sockaddr, err := unix.Getpeername(int(res))
 				if err != nil {
-
+					slog.ErrorContext(ctx, "Getpeername", "err", err)
+					continue
 				}
 
-				switch a.sockAddr.Family {
-				case unix.AF_INET:
-					port := binary.BigEndian.Uint16(a.sockAddr.Data[0:2])
-					addr := netip.AddrFrom4([4]byte(a.sockAddr.Data[2:6]))
+				// IORING_CQE_F_MOREフラグをチェクし、何か問題が起きていないか確認する
+				// 問題が起きていた場合、再度Accpet_MultiShotを行う
 
-					ip := netip.AddrPortFrom(addr, port)
+				switch sa := sockaddr.(type) {
+				case *unix.SockaddrInet4:
+					addr := netip.AddrFrom4(sa.Addr)
+					ip := netip.AddrPortFrom(addr, uint16(sa.Port))
 
 					peer := &Peer{
 						Fd:        res,
@@ -121,16 +120,16 @@ LOOP:
 						writeChan: a.writeChan,
 					}
 					slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
-					// io_uring_prep_recv_multishot()と同じ動作を行う
+
 					err := a.watchPeer(peer)
 					if err != nil {
 						slog.ErrorContext(ctx, "WatchRead", "err", err)
 					}
 
-					a.peerAcceptor.SetPeer(peer.Fd, peer)
+					a.peerAcceptor.RegisterPeer(peer.Fd, peer)
 				}
 			case EVENT_TYPE_READ:
-				peer := a.peerAcceptor.GetPeer(fd)
+				peer := a.peerAcceptor.GetPeer(sourceFd)
 				// peerが持っているbuffer領域にコピーする
 				buffer := make([]byte, res)
 				a.uring.Read(buffer)
@@ -149,7 +148,7 @@ LOOP:
 				//slog.InfoContext(ctx, "Write", "peer", peer, "res", res)
 
 			case EVENT_TYPE_WRITE:
-				peer := a.peerAcceptor.GetPeer(fd)
+				peer := a.peerAcceptor.GetPeer(sourceFd)
 				slog.ErrorContext(ctx, "Write", "peer", peer, "res", res)
 			}
 		}
