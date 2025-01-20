@@ -6,3 +6,5 @@
 - POST /echo : オウム返しをします
 - GET / : hello! I'm go server ! を返します
 
+### TODO
+- [ ] アプリケーション層とio層を分離する
