@@ -129,7 +129,11 @@ LOOP:
 					a.peerAcceptor.RegisterPeer(peer.Fd, peer)
 				}
 			case EVENT_TYPE_READ:
+				// https://manpages.debian.org/unstable/manpages-dev/pread.2.en.html
+				// a return of zero indicates end of file
 				if res < 1 {
+					slog.InfoContext(ctx, "EOF", "fd", sourceFd)
+					//TODO fdをCloseする
 					continue
 				}
 				peer := a.peerAcceptor.GetPeer(sourceFd)

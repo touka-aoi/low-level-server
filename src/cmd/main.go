@@ -23,7 +23,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	strAddress := "127.0.0.1:8080"
+	strAddress := "127.0.0.1:8081"
 	ip, err := netip.ParseAddrPort(strAddress)
 	if err != nil {
 		slog.DebugContext(ctx, "ParseAddrPort", "err", err)

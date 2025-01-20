@@ -14,11 +14,26 @@ const (
 	MaxBufferSize = 20 * 1024
 )
 
+type EventType int
+
 const (
-	EVENT_TYPE_ACCEPT = iota
+	EVENT_TYPE_ACCEPT EventType = iota
 	EVENT_TYPE_READ
 	EVENT_TYPE_WRITE
 )
+
+func (et EventType) String() string {
+	switch et {
+	case EVENT_TYPE_ACCEPT:
+		return "EVENT_TYPE_ACCEPT"
+	case EVENT_TYPE_READ:
+		return "EVENT_TYPE_READ"
+	case EVENT_TYPE_WRITE:
+		return "EVENT_TYPE_WRITE"
+	default:
+		return "UNKNOWN"
+	}
+}
 
 const (
 	IORING_OFF_SQ_RING int64 = 0
@@ -359,12 +374,12 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 
 }
 
-func (u *Uring) encodeUserData(eventType int, fd int32) uint64 {
+func (u *Uring) encodeUserData(eventType EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (u *Uring) decodeUserData(userData uint64) (eventType int, fd int32) {
-	return int(userData >> 32), int32(userData & 0xffffffff)
+func (u *Uring) decodeUserData(userData uint64) (eventType EventType, fd int32) {
+	return EventType(userData >> 32), int32(userData & 0xffffffff)
 }
 
 func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
@@ -476,7 +491,7 @@ func (u *Uring) WatchRead(fd int32) error {
 	return nil
 }
 
-func (u *Uring) Wait() (int32, int, int32) {
+func (u *Uring) Wait() (int32, EventType, int32) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
