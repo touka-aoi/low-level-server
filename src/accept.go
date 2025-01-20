@@ -129,6 +129,9 @@ LOOP:
 					a.peerAcceptor.RegisterPeer(peer.Fd, peer)
 				}
 			case EVENT_TYPE_READ:
+				if res < 1 {
+					continue
+				}
 				peer := a.peerAcceptor.GetPeer(sourceFd)
 				// peerが持っているbuffer領域にコピーする
 				buffer := make([]byte, res)
@@ -138,7 +141,7 @@ LOOP:
 				if err != nil {
 					slog.Error("ReadRequest", "err", err)
 				}
-				slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
+				slog.Info("Read", "method", req.Method, "url", req.URL, "req", req)
 
 				// 200 OK を返す
 				body := "hello! I'm go server !"

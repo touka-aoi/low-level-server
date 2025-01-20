@@ -301,7 +301,7 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	}
 	u.AcceptBuffer = uringBufRing
 
-	// ここにメモリバリアを設置したい
+	//TODO ここにメモリバリアを設置したい
 	b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[0]))
 	b.Resv = maxConnection
 
@@ -444,13 +444,15 @@ func (u *Uring) Write(fd int32, buffer []byte) {
 }
 
 func (u *Uring) WatchRead(fd int32) error {
+	//TODO: MUTLISHOTように関数化 readMultishot(fd, groupBuffer, )
 	op := UringSQE{
-		Opcode: IORING_OP_READ,
+		Opcode: IORING_OP_READ_MULTISHOT,
 		Fd:     fd,
 		Flags:  IOSQE_BUFFER_SELECT,
 		//Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
 		//Len:      uint32(len(u.Buffer)),
 		UserData: u.encodeUserData(EVENT_TYPE_READ, fd),
+		BufIndex: 1,
 	}
 
 	//TODO ここのforループを関数化する
@@ -501,8 +503,9 @@ func (u *Uring) Wait() (int32, int, int32) {
 }
 
 func (u *Uring) Read(buffer []byte) {
+	// readMultishotに関数名を変更したい
 	//TODO fixed bufferを使うように変更
-	copy(buffer, u.Buffer[:len(buffer)])
+	copy(buffer, u.AcceptBuffer[:len(buffer)])
 }
 
 func (u *Uring) getCQE() *UringCQE {
