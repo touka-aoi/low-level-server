@@ -53,6 +53,14 @@ const (
 )
 
 const (
+	IORING_CQE_F_BUFFER = 1 << iota
+	IORING_CQE_F_MORE
+	IORING_CQE_F_SOCK_NONEMPTY
+	IORING_CQE_F_NOTIF
+	IORING_CQE_F_BUF_MORE
+)
+
+const (
 	IORING_OP_NOP = iota
 	IORING_OP_READV
 	IORING_OP_WRITEV
@@ -511,6 +519,11 @@ func (u *Uring) Wait() (int32, EventType, int32) {
 
 	if cqe.Res < 0 {
 		//TODO: error handling
+	}
+
+	// MULTISHOT専用分岐があるのでうまいことする
+	if cqe.Flags&IORING_CQE_F_MORE != 0 {
+		slog.Info("CQE more flag is set")
 	}
 
 	eventType, fd := u.decodeUserData(cqe.UserData)
