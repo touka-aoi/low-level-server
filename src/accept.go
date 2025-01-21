@@ -4,12 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log/slog"
 	"net/http"
 	"net/netip"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 const maxConnection = 4096
@@ -65,15 +64,16 @@ func (a *Acceptor) Serve(ctx context.Context) {
 	<-ctx.Done()
 }
 
-func (a *Acceptor) serverLoop(ctx context.Context) {
-	// ここ関数化したいけど、関数化するとsockAddrのポインタがめんどいことになるな...
-	// というかこのsockAddr並行安全性がないので子のループは同時並行ではない
+func (a *Acceptor) accept() {
 	a.sockAddr = &sockAddr{}
 	a.sockLen = uint32(unsafe.Sizeof(a.sockAddr))
-	// sockAddrが一つしかないので並行処理できない
-	a.uring.Accpet(a.socket, a.sockAddr, &a.sockLen)
+	a.uring.AccpetMultishot(a.socket, a.sockAddr, &a.sockLen)
+}
 
-	slog.InfoContext(ctx, "MainLoop start")
+func (a *Acceptor) serverLoop(ctx context.Context) {
+	slog.InfoContext(ctx, "serverLoop start")
+
+	a.accept()
 LOOP:
 	for {
 		select {
@@ -82,6 +82,7 @@ LOOP:
 
 		default:
 
+			// このループは別建てでも別にええな
 		LOOP2:
 			for {
 				select {
@@ -93,14 +94,13 @@ LOOP:
 				}
 			}
 
-			//TODO: cqeからデータを受け取ることがわかるもっといい名前
-			res, eventType, sourceFd := a.uring.Wait()
-			slog.InfoContext(ctx, "CQE", "cqe res", res, "event Type", eventType, "fd", sourceFd)
+			cqe := a.uring.WaitEvent()
+			cqe2 := cqe.DecodeUserData()
+			slog.InfoContext(ctx, "CQE", "cqe res", cqe2.Res, "event Type", cqe2.EventType, "fd", cqe2.SourceFD)
 
-			// handle eventとして関数化したいな
-			switch eventType {
+			switch cqe2.EventType {
 			case EVENT_TYPE_ACCEPT:
-				sockaddr, err := unix.Getpeername(int(res))
+				sockaddr, err := unix.Getpeername(int(cqe2.Res))
 				if err != nil {
 					slog.ErrorContext(ctx, "Getpeername", "err", err)
 					continue
@@ -115,7 +115,7 @@ LOOP:
 					ip := netip.AddrPortFrom(addr, uint16(sa.Port))
 
 					peer := &Peer{
-						Fd:        res,
+						Fd:        cqe2.Res,
 						Ip:        ip,
 						writeChan: a.writeChan,
 					}
@@ -128,19 +128,27 @@ LOOP:
 
 					a.peerAcceptor.RegisterPeer(peer.Fd, peer)
 				}
+			case EVENT_TYPE_WRITE:
+				peer := a.peerAcceptor.GetPeer(cqe2.SourceFD)
+				slog.ErrorContext(ctx, "Write", "peer", peer, "res", cqe2.Res)
+
 			case EVENT_TYPE_READ:
 				// https://manpages.debian.org/unstable/manpages-dev/pread.2.en.html
 				// a return of zero indicates end of file
-				if res < 1 {
-					slog.InfoContext(ctx, "EOF", "fd", sourceFd)
-					//TODO fdをCloseする
+				if cqe.Res < 1 {
+					slog.InfoContext(ctx, "EOF", "fd", cqe2.SourceFD)
+					err := a.peerAcceptor.GetPeer(cqe2.SourceFD).Close()
+					if err != nil {
+						slog.ErrorContext(ctx, "Close", "err", err)
+					}
 					continue
 				}
-				peer := a.peerAcceptor.GetPeer(sourceFd)
-				// peerが持っているbuffer領域にコピーする
-				buffer := make([]byte, res)
+				peer := a.peerAcceptor.GetPeer(cqe2.SourceFD)
+				buffer := make([]byte, cqe2.Res)
 				a.uring.Read(buffer)
 				peer.Buffer = buffer
+
+				// applicaition handler に渡す
 				req, err := http.ReadRequest(bufio.NewReader(peer))
 				if err != nil {
 					slog.Error("ReadRequest", "err", err)
@@ -154,9 +162,6 @@ LOOP:
 				peer.Write([]byte(response))
 				//slog.InfoContext(ctx, "Write", "peer", peer, "res", res)
 
-			case EVENT_TYPE_WRITE:
-				peer := a.peerAcceptor.GetPeer(sourceFd)
-				slog.ErrorContext(ctx, "Write", "peer", peer, "res", res)
 			}
 		}
 	}

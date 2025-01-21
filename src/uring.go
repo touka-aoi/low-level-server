@@ -172,6 +172,13 @@ type UringCQE struct {
 	Flags    uint32
 }
 
+type UringCQE2 struct {
+	SourceFD  int32
+	EventType EventType
+	Res       int32
+	Flags     uint32
+}
+
 type Uring struct {
 	Fd            int32
 	SQ            SQ
@@ -328,56 +335,6 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 	b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[0]))
 	b.Resv = maxConnection
 
-	// 先頭のtailをmaxConnectionに設定
-
-	// PBUFにおいて、PROVIDE_BUFFERSは必要ない
-
-	//// io-uringに登録
-	//op := UringSQE{
-	//	Opcode:   IORING_OP_PROVIDE_BUFFERS,
-	//	Fd:       maxConnection,
-	//	Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.AcceptBuffer)))),
-	//	Len:      uint32(MaxBufferSize),
-	//	BufIndex: uint16(bufferGroupID),
-	//	Offset:   0,
-	//}
-	//
-	//for {
-	//	tail := atomic.LoadUint32(u.SQ.Tail)
-	//
-	//	if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
-	//		sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
-	//		sqe[tail&*u.SQ.Mask] = op
-	//
-	//		array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
-	//		array[tail&*u.SQ.Mask] = tail
-	//
-	//		break
-	//	}
-	//	runtime.Gosched()
-	//}
-	//
-	//res, _, errno = unix.Syscall6(
-	//	unix.SYS_IO_URING_ENTER,
-	//	uintptr(u.Fd),
-	//	1,
-	//	1,
-	//	IORING_ENTER_GETEVENTS,
-	//	0,
-	//	0)
-	//
-	//if res < 0 || errno != 0 {
-	//	//TODO エラーとして返す
-	//	slog.Error("io-uring register provide buffer", "errno", errno, "err", errno.Error())
-	//	panic(errno)
-	//}
-	//
-	//cqe := u.getCQE()
-	//
-	//if cqe.Res < 0 {
-	//	slog.Error("io-uring register provide buffer failed", "cqe", cqe)
-	//}
-
 	slog.Info("io-uring register provide buffer success")
 
 }
@@ -386,14 +343,19 @@ func (u *Uring) encodeUserData(eventType EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (u *Uring) decodeUserData(userData uint64) (eventType EventType, fd int32) {
-	return EventType(userData >> 32), int32(userData & 0xffffffff)
+func (cqe *UringCQE) DecodeUserData() *UringCQE2 {
+	return &UringCQE2{
+		SourceFD:  int32(cqe.UserData & 0xffffffff),
+		EventType: EventType(cqe.UserData >> 32),
+		Res:       cqe.Res,
+		Flags:     cqe.Flags,
+	}
 }
 
-func (u *Uring) Accpet(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
+func (u *Uring) AccpetMultishot(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
 	op := UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
-		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore  .kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
+		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
 		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
@@ -499,7 +461,7 @@ func (u *Uring) WatchRead(fd int32) error {
 	return nil
 }
 
-func (u *Uring) Wait() (int32, EventType, int32) {
+func (u *Uring) WaitEvent() *UringCQE {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
@@ -510,29 +472,44 @@ func (u *Uring) Wait() (int32, EventType, int32) {
 		0)
 
 	if res < 0 || errno != 0 {
-		//TODO エラーとして返す
-		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
-		panic(errno)
+		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error())
 	}
 
-	cqe := u.getCQE()
-
-	if cqe.Res < 0 {
-		//TODO: error handling
-	}
-
-	// MULTISHOT専用分岐があるのでうまいことする
-	if cqe.Flags&IORING_CQE_F_MORE != 0 {
-		slog.Info("CQE more flag is set")
-	}
-
-	eventType, fd := u.decodeUserData(cqe.UserData)
-	return cqe.Res, eventType, fd
+	return u.getCQE()
 }
 
+//func (u *Uring) Wait() (int32, EventType, int32) {
+//	res, _, errno := unix.Syscall6(
+//		unix.SYS_IO_URING_ENTER,
+//		uintptr(u.Fd),
+//		0,
+//		1,
+//		IORING_ENTER_GETEVENTS,
+//		0,
+//		0)
+//
+//	if res < 0 || errno != 0 {
+//		//TODO エラーとして返す
+//		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
+//		panic(errno)
+//	}
+//
+//	cqe := u.getCQE()
+//
+//	if cqe.Res < 0 {
+//		//TODO: error handling
+//	}
+//
+//	// MULTISHOT専用分岐があるのでうまいことする
+//	if cqe.Flags&IORING_CQE_F_MORE != 0 {
+//		slog.Info("CQE more flag is set")
+//	}
+//
+//	eventType, fd := u.decodeUserData(cqe.UserData)
+//	return cqe.Res, eventType, fd
+//}
+
 func (u *Uring) Read(buffer []byte) {
-	// readMultishotに関数名を変更したい
-	//TODO fixed bufferを使うように変更
 	copy(buffer, u.AcceptBuffer[:len(buffer)])
 }
 
