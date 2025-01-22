@@ -35,121 +35,6 @@ func (et EventType) String() string {
 	}
 }
 
-const (
-	IORING_OFF_SQ_RING int64 = 0
-	ORING_OFF_CQ_RING  int64 = 0x8000000
-	IORING_OFF_SQES    int64 = 0x10000000
-)
-
-// IO_URING_ENTER flags
-const (
-	IORING_ENTER_GETEVENTS = 1 << iota
-	IORING_ENTER_SQ_WAKEUP
-	IORING_ENTER_SQ_WAIT
-	IORING_ENTER_EXT_ARG
-	IORING_ENTER_REGISTERED_RING
-	IORING_ENTER_ABS_TIMER
-	IORING_ENTER_EXT_ARG_REG
-)
-
-const (
-	IORING_CQE_F_BUFFER = 1 << iota
-	IORING_CQE_F_MORE
-	IORING_CQE_F_SOCK_NONEMPTY
-	IORING_CQE_F_NOTIF
-	IORING_CQE_F_BUF_MORE
-)
-
-const (
-	IORING_OP_NOP = iota
-	IORING_OP_READV
-	IORING_OP_WRITEV
-	IORING_OP_FSYNC
-	IORING_OP_READ_FIXED
-	IORING_OP_WRITE_FIXED
-	IORING_OP_POLL_ADD
-	IORING_OP_POLL_REMOVE
-	IORING_OP_SYNC_FILE_RANGE
-	IORING_OP_SENDMSG
-	IORING_OP_RECVMSG
-	IORING_OP_TIMEOUT
-	IORING_OP_TIMEOUT_REMOVE
-	IORING_OP_ACCEPT
-	IORING_OP_ASYNC_CANCEL
-	IORING_OP_LINK_TIMEOUT
-	IORING_OP_CONNECT
-	IORING_OP_FALLOCATE
-	IORING_OP_OPENAT
-	IORING_OP_CLOSE
-	IORING_OP_FILES_UPDATE
-	IORING_OP_STATX
-	IORING_OP_READ
-	IORING_OP_WRITE
-	IORING_OP_FADVISE
-	IORING_OP_MADVISE
-	IORING_OP_SEND
-	IORING_OP_RECV
-	IORING_OP_OPENAT2
-	IORING_OP_EPOLL_CTL
-	IORING_OP_SPLICE
-	IORING_OP_PROVIDE_BUFFERS
-	IORING_OP_REMOVE_BUFFERS
-	IORING_OP_TEE
-	IORING_OP_SHUTDOWN
-	IORING_OP_RENAMEAT
-	IORING_OP_UNLINKAT
-	IORING_OP_MKDIRAT
-	IORING_OP_SYMLINKAT
-	IORING_OP_LINKAT
-	IORING_OP_MSG_RING
-	IORING_OP_FSETXATTR
-	IORING_OP_SETXATTR
-	IORING_OP_FGETXATTR
-	IORING_OP_GETXATTR
-	IORING_OP_SOCKET
-	IORING_OP_URING_CMD
-	IORING_OP_SEND_ZC
-	IORING_OP_SENDMSG_ZC
-	IORING_OP_READ_MULTISHOT
-	IORING_OP_WAITID
-	IORING_OP_FUTEX_WAIT
-	IORING_OP_FUTEX_WAKE
-	IORING_OP_FUTEX_WAITV
-	IORING_OP_FIXED_FD_INSTALL
-	IORING_OP_FTRUNCATE
-	IORING_OP_BIND
-	IORING_OP_LISTEN
-
-	IORING_OP_LAST
-)
-
-const (
-	IOSQE_FIXED_FILE = 1 << iota
-	IOSQE_IO_DRAIN
-	IOSQE_IO_LINK
-	IOSQE_IO_HARDLINK
-	IOSQE_ASYNC
-	IOSQE_BUFFER_SELECT
-	IOSQE_CQE_SKIP_SUCCESS
-)
-
-// accept flags stored in sqe->ioprio
-// https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
-const (
-	IORING_ACCEPT_MULTISHOT = 1 << iota
-	IORING_ACCEPT_DONTWAIT
-	IORING_ACCEPT_POLL_FIRST
-)
-
-const (
-	IORING_FEAT_SINGLE_MMAP = 1 << 0
-)
-
-// https://github.com/axboe/liburing/blob/c5eead2659ef5ea86ef8c78410fa42d9bea976c9/src/include/liburing/io_uring.h#L565
-const (
-	IORING_REGISTER_PBUF_RING = 22
-)
-
 type UringSQE struct {
 	Opcode      uint8
 	Flags       uint8
@@ -170,13 +55,6 @@ type UringCQE struct {
 	UserData uint64
 	Res      int32
 	Flags    uint32
-}
-
-type UringCQE2 struct {
-	SourceFD  int32
-	EventType EventType
-	Res       int32
-	Flags     uint32
 }
 
 type Uring struct {
@@ -339,37 +217,62 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 
 }
 
-func (u *Uring) encodeUserData(eventType EventType, fd int32) uint64 {
+func (u *Uring) EncodeUserData(eventType EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (cqe *UringCQE) DecodeUserData() *UringCQE2 {
-	return &UringCQE2{
-		SourceFD:  int32(cqe.UserData & 0xffffffff),
-		EventType: EventType(cqe.UserData >> 32),
-		Res:       cqe.Res,
-		Flags:     cqe.Flags,
-	}
+func (u *Uring) DecodeUserData(userData uint64) (EventType, int32) {
+	return EventType(userData >> 32), int32(userData & 0xffffffff)
 }
 
 func (u *Uring) AccpetMultishot(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
-	op := UringSQE{
+	op := &UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
-		UserData: u.encodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
+		UserData: u.EncodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
+	u.pushSQE(op)
+	u.sendSQE()
+
+}
+
+func (u *Uring) Write(fd int32, buffer []byte) {
+	op := &UringSQE{
+		Opcode:   IORING_OP_WRITE,
+		Fd:       fd,
+		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
+		Flags:    IOSQE_CQE_SKIP_SUCCESS,
+		Len:      uint32(len(buffer)),
+		UserData: u.EncodeUserData(EVENT_TYPE_WRITE, fd),
+	}
+
+	u.pushSQE(op)
+	u.sendSQE()
+}
+
+func (u *Uring) WatchReadMultiShot(fd int32) {
+	op := &UringSQE{
+		Opcode:   IORING_OP_READ_MULTISHOT,
+		Fd:       fd,
+		Flags:    IOSQE_BUFFER_SELECT,
+		UserData: u.EncodeUserData(EVENT_TYPE_READ, fd),
+		BufIndex: 1,
+	}
+
+	u.pushSQE(op)
+	u.sendSQE()
+}
+
+func (u *Uring) pushSQE(op *UringSQE) {
 	for {
 		tail := atomic.LoadUint32(u.SQ.Tail)
 
-		//TODO: 満杯になるケースを考慮する
-
 		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
 			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
-			sqe[tail&*u.SQ.Mask] = op
+			sqe[tail&*u.SQ.Mask] = *op
 
-			//TDOO: NO_ARRAYも試してみる
 			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
 			array[tail&*u.SQ.Mask] = tail
 
@@ -377,9 +280,6 @@ func (u *Uring) AccpetMultishot(socket *Socket, sockAddr *sockAddr, sockLen *uin
 		}
 		runtime.Gosched()
 	}
-
-	u.sendSQE()
-
 }
 
 func (u *Uring) sendSQE() {
@@ -393,75 +293,12 @@ func (u *Uring) sendSQE() {
 		0)
 
 	if res < 0 || errno != 0 {
-		//TODO エラーとして返す
 		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 }
 
-func (u *Uring) Write(fd int32, buffer []byte) {
-	//TOOD: 成功時はCQEを返さない
-	op := UringSQE{
-		Opcode:   IORING_OP_WRITE,
-		Fd:       fd,
-		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
-		Flags:    IOSQE_CQE_SKIP_SUCCESS,
-		Len:      uint32(len(buffer)),
-		UserData: u.encodeUserData(EVENT_TYPE_WRITE, fd),
-	}
-
-	for {
-		tail := atomic.LoadUint32(u.SQ.Tail)
-
-		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
-			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
-			sqe[tail&*u.SQ.Mask] = op
-
-			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
-			array[tail&*u.SQ.Mask] = tail
-
-			break
-		}
-		runtime.Gosched()
-	}
-
-	u.sendSQE()
-}
-
-func (u *Uring) WatchRead(fd int32) error {
-	//TODO: MUTLISHOTように関数化 readMultishot(fd, groupBuffer, )
-	op := UringSQE{
-		Opcode: IORING_OP_READ_MULTISHOT,
-		Fd:     fd,
-		Flags:  IOSQE_BUFFER_SELECT,
-		//Address:  uint64(uintptr(unsafe.Pointer(unsafe.SliceData(u.Buffer)))),
-		//Len:      uint32(len(u.Buffer)),
-		UserData: u.encodeUserData(EVENT_TYPE_READ, fd),
-		BufIndex: 1,
-	}
-
-	//TODO ここのforループを関数化する
-	for {
-		tail := atomic.LoadUint32(u.SQ.Tail)
-
-		if atomic.CompareAndSwapUint32(u.SQ.Tail, tail, tail+1) {
-			sqe := unsafe.Slice((*UringSQE)(unsafe.Pointer(u.SQ.SQEPtr)), *u.SQ.Entries)
-			sqe[tail&*u.SQ.Mask] = op
-
-			array := unsafe.Slice((*uint32)(unsafe.Pointer(u.SQ.ArrayPtr)), *u.SQ.Entries)
-			array[tail&*u.SQ.Mask] = tail
-
-			break
-		}
-		runtime.Gosched()
-	}
-
-	u.sendSQE()
-
-	return nil
-}
-
-func (u *Uring) WaitEvent() *UringCQE {
+func (u *Uring) WaitEvent() (*UringCQE, error) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
@@ -473,41 +310,11 @@ func (u *Uring) WaitEvent() *UringCQE {
 
 	if res < 0 || errno != 0 {
 		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error())
+		return nil, errno
 	}
 
-	return u.getCQE()
+	return u.getCQE(), nil
 }
-
-//func (u *Uring) Wait() (int32, EventType, int32) {
-//	res, _, errno := unix.Syscall6(
-//		unix.SYS_IO_URING_ENTER,
-//		uintptr(u.Fd),
-//		0,
-//		1,
-//		IORING_ENTER_GETEVENTS,
-//		0,
-//		0)
-//
-//	if res < 0 || errno != 0 {
-//		//TODO エラーとして返す
-//		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
-//		panic(errno)
-//	}
-//
-//	cqe := u.getCQE()
-//
-//	if cqe.Res < 0 {
-//		//TODO: error handling
-//	}
-//
-//	// MULTISHOT専用分岐があるのでうまいことする
-//	if cqe.Flags&IORING_CQE_F_MORE != 0 {
-//		slog.Info("CQE more flag is set")
-//	}
-//
-//	eventType, fd := u.decodeUserData(cqe.UserData)
-//	return cqe.Res, eventType, fd
-//}
 
 func (u *Uring) Read(buffer []byte) {
 	copy(buffer, u.AcceptBuffer[:len(buffer)])
@@ -542,8 +349,12 @@ func (u *Uring) getCQE() *UringCQE {
 	return nil
 }
 
-func (u *Uring) Close() {
-	unix.Close(int(u.Fd))
+func (u *Uring) Close() error {
+	err := unix.Close(int(u.Fd))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type uringParams struct {
@@ -599,6 +410,117 @@ type uringBuf struct {
 	Resv uint16
 }
 
-//type uringBufRing struct {
-//	uringBuf []uringBuf
-//}
+const (
+	IORING_OFF_SQ_RING int64 = 0
+	ORING_OFF_CQ_RING  int64 = 0x8000000
+	IORING_OFF_SQES    int64 = 0x10000000
+)
+
+// IO_URING_ENTER flags
+const (
+	IORING_ENTER_GETEVENTS = 1 << iota
+	IORING_ENTER_SQ_WAKEUP
+	IORING_ENTER_SQ_WAIT
+	IORING_ENTER_EXT_ARG
+	IORING_ENTER_REGISTERED_RING
+	IORING_ENTER_ABS_TIMER
+	IORING_ENTER_EXT_ARG_REG
+)
+
+const (
+	IORING_CQE_F_BUFFER = 1 << iota
+	IORING_CQE_F_MORE
+	IORING_CQE_F_SOCK_NONEMPTY
+	IORING_CQE_F_NOTIF
+	IORING_CQE_F_BUF_MORE
+)
+
+const (
+	IORING_OP_NOP = iota
+	IORING_OP_READV
+	IORING_OP_WRITEV
+	IORING_OP_FSYNC
+	IORING_OP_READ_FIXED
+	IORING_OP_WRITE_FIXED
+	IORING_OP_POLL_ADD
+	IORING_OP_POLL_REMOVE
+	IORING_OP_SYNC_FILE_RANGE
+	IORING_OP_SENDMSG
+	IORING_OP_RECVMSG
+	IORING_OP_TIMEOUT
+	IORING_OP_TIMEOUT_REMOVE
+	IORING_OP_ACCEPT
+	IORING_OP_ASYNC_CANCEL
+	IORING_OP_LINK_TIMEOUT
+	IORING_OP_CONNECT
+	IORING_OP_FALLOCATE
+	IORING_OP_OPENAT
+	IORING_OP_CLOSE
+	IORING_OP_FILES_UPDATE
+	IORING_OP_STATX
+	IORING_OP_READ
+	IORING_OP_WRITE
+	IORING_OP_FADVISE
+	IORING_OP_MADVISE
+	IORING_OP_SEND
+	IORING_OP_RECV
+	IORING_OP_OPENAT2
+	IORING_OP_EPOLL_CTL
+	IORING_OP_SPLICE
+	IORING_OP_PROVIDE_BUFFERS
+	IORING_OP_REMOVE_BUFFERS
+	IORING_OP_TEE
+	IORING_OP_SHUTDOWN
+	IORING_OP_RENAMEAT
+	IORING_OP_UNLINKAT
+	IORING_OP_MKDIRAT
+	IORING_OP_SYMLINKAT
+	IORING_OP_LINKAT
+	IORING_OP_MSG_RING
+	IORING_OP_FSETXATTR
+	IORING_OP_SETXATTR
+	IORING_OP_FGETXATTR
+	IORING_OP_GETXATTR
+	IORING_OP_SOCKET
+	IORING_OP_URING_CMD
+	IORING_OP_SEND_ZC
+	IORING_OP_SENDMSG_ZC
+	IORING_OP_READ_MULTISHOT
+	IORING_OP_WAITID
+	IORING_OP_FUTEX_WAIT
+	IORING_OP_FUTEX_WAKE
+	IORING_OP_FUTEX_WAITV
+	IORING_OP_FIXED_FD_INSTALL
+	IORING_OP_FTRUNCATE
+	IORING_OP_BIND
+	IORING_OP_LISTEN
+
+	IORING_OP_LAST
+)
+
+const (
+	IOSQE_FIXED_FILE = 1 << iota
+	IOSQE_IO_DRAIN
+	IOSQE_IO_LINK
+	IOSQE_IO_HARDLINK
+	IOSQE_ASYNC
+	IOSQE_BUFFER_SELECT
+	IOSQE_CQE_SKIP_SUCCESS
+)
+
+// accept flags stored in sqe->ioprio
+// https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
+const (
+	IORING_ACCEPT_MULTISHOT = 1 << iota
+	IORING_ACCEPT_DONTWAIT
+	IORING_ACCEPT_POLL_FIRST
+)
+
+const (
+	IORING_FEAT_SINGLE_MMAP = 1 << 0
+)
+
+// https://github.com/axboe/liburing/blob/c5eead2659ef5ea86ef8c78410fa42d9bea976c9/src/include/liburing/io_uring.h#L565
+const (
+	IORING_REGISTER_PBUF_RING = 22
+)

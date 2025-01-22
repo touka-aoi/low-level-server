@@ -24,12 +24,12 @@ type Acceptor struct {
 	peerAcceptor  *PeerAcceptor
 }
 
-// TODO: touka-aoi change the name
 func NewAcceptor() *Acceptor {
-	//TODO: touka-aoi add error handling to CreateSocket
 	socket := CreateSocket()
+	//TODO: touka-aoi refactor option structure
+	ID := 1
 	uring := CreateUring(maxConnection)
-	uring.RegisterRingBuffer(1)
+	uring.RegisterRingBuffer(ID)
 	return &Acceptor{
 		socket:        socket,
 		uring:         uring,
@@ -40,8 +40,8 @@ func NewAcceptor() *Acceptor {
 }
 
 func (a *Acceptor) Close() {
-	a.socket.Close()
-	a.uring.Close()
+	_ = a.socket.Close()
+	_ = a.uring.Close()
 }
 
 func (a *Acceptor) Listen(address string) error {
@@ -57,10 +57,8 @@ func (a *Acceptor) Listen(address string) error {
 }
 
 func (a *Acceptor) Serve(ctx context.Context) {
-	// ここでサーバーループを回す
 	go a.serverLoop(ctx)
 
-	// ほんとは上の関数をメインで走らせたい
 	<-ctx.Done()
 }
 
@@ -74,33 +72,26 @@ func (a *Acceptor) serverLoop(ctx context.Context) {
 	slog.InfoContext(ctx, "serverLoop start")
 
 	a.accept()
-LOOP:
 	for {
 		select {
 		case <-ctx.Done():
-			break LOOP
+			return
+
+		case writer := <-a.writeChan:
+			a.uring.Write(writer.Fd, writer.Buffer)
 
 		default:
-
-			// このループは別建てでも別にええな
-		LOOP2:
-			for {
-				select {
-				case writer := <-a.writeChan:
-					//TODO: 一度に複数のデータをopに変換してSQを一度だけ呼び出す
-					a.uring.Write(writer.Fd, writer.Buffer)
-				default:
-					break LOOP2
-				}
+			cqe, err := a.uring.WaitEvent()
+			if err != nil {
+				slog.ErrorContext(ctx, "WaitEvent", "err", err)
+				continue
 			}
+			eventType, sourceFD := a.uring.DecodeUserData(cqe.UserData)
+			slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "event Type", eventType, "fd", sourceFD)
 
-			cqe := a.uring.WaitEvent()
-			cqe2 := cqe.DecodeUserData()
-			slog.InfoContext(ctx, "CQE", "cqe res", cqe2.Res, "event Type", cqe2.EventType, "fd", cqe2.SourceFD)
-
-			switch cqe2.EventType {
+			switch eventType {
 			case EVENT_TYPE_ACCEPT:
-				sockaddr, err := unix.Getpeername(int(cqe2.Res))
+				sockaddr, err := unix.Getpeername(int(cqe.Res))
 				if err != nil {
 					slog.ErrorContext(ctx, "Getpeername", "err", err)
 					continue
@@ -115,36 +106,29 @@ LOOP:
 					ip := netip.AddrPortFrom(addr, uint16(sa.Port))
 
 					peer := &Peer{
-						Fd:        cqe2.Res,
+						Fd:        cqe.Res,
 						Ip:        ip,
 						writeChan: a.writeChan,
 					}
 					slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
 
-					err := a.watchPeer(peer)
-					if err != nil {
-						slog.ErrorContext(ctx, "WatchRead", "err", err)
-					}
-
+					a.watchPeer(peer)
 					a.peerAcceptor.RegisterPeer(peer.Fd, peer)
 				}
 			case EVENT_TYPE_WRITE:
-				peer := a.peerAcceptor.GetPeer(cqe2.SourceFD)
-				slog.ErrorContext(ctx, "Write", "peer", peer, "res", cqe2.Res)
+				peer := a.peerAcceptor.GetPeer(sourceFD)
+				slog.ErrorContext(ctx, "Write", "peer", peer, "res", cqe.Res)
 
 			case EVENT_TYPE_READ:
 				// https://manpages.debian.org/unstable/manpages-dev/pread.2.en.html
 				// a return of zero indicates end of file
 				if cqe.Res < 1 {
-					slog.InfoContext(ctx, "EOF", "fd", cqe2.SourceFD)
-					err := a.peerAcceptor.GetPeer(cqe2.SourceFD).Close()
-					if err != nil {
-						slog.ErrorContext(ctx, "Close", "err", err)
-					}
+					slog.InfoContext(ctx, "EOF", "fd", sourceFD)
+					a.peerAcceptor.UnregisterPeer(sourceFD)
 					continue
 				}
-				peer := a.peerAcceptor.GetPeer(cqe2.SourceFD)
-				buffer := make([]byte, cqe2.Res)
+				peer := a.peerAcceptor.GetPeer(sourceFD)
+				buffer := make([]byte, cqe.Res)
 				a.uring.Read(buffer)
 				peer.Buffer = buffer
 
@@ -160,74 +144,12 @@ LOOP:
 				contentLen := len(body)
 				response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", contentLen, body)
 				peer.Write([]byte(response))
-				//slog.InfoContext(ctx, "Write", "peer", peer, "res", res)
 
 			}
 		}
 	}
-
-	slog.InfoContext(ctx, "MainLoop end")
 }
 
-func (a *Acceptor) HandleData(r *bufio.Reader) {
-	//req, err := http.ReadRequest(r)
-	//if err != nil {
-	//	slog.Error("ReadRequest", "err", err)
-	//}
-	//slog.Info("Request", "method", req.Method, "url", req.URL, "req", req)
-	//
-	//// fdからwriterを作成しないといけない
-	//rw := NewBufioResponseWriter()
-	//mux := http.NewServeMux()
-	//mux.ServeHTTP(rw, req)
-	//
-	//if err := a.writer.Flush(); err != nil {
-	//	fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
-	//}
+func (a *Acceptor) watchPeer(peer *Peer) {
+	a.uring.WatchReadMultiShot(peer.Fd)
 }
-
-func (a *Acceptor) watchPeer(peer *Peer) error {
-	err := a.uring.WatchRead(peer.Fd)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// type bufioResponseWriter struct {
-// 	writer      *bufio.Writer
-// 	headers     http.Header
-// 	status      int
-// 	wroteHeader bool
-// }
-
-// func NewBufioResponseWriter(w *bufio.Writer) *bufioResponseWriter {
-// 	return &bufioResponseWriter{
-// 		writer:  w,
-// 		headers: make(http.Header),
-// 		status:  http.StatusOK,
-// 	}
-// }
-
-// func (w *bufioResponseWriter) Header() http.Header {
-// 	return w.headers
-// }
-
-// func (w *bufioResponseWriter) Write(data []byte) (int, error) {
-// 	if !w.wroteHeader {
-// 		w.WriteHeader(http.StatusOK)
-// 	}
-// 	return w.writer.Write(data)
-// }
-
-// func (w *bufioResponseWriter) WriteHeader(statusCode int) {
-// 	if w.wroteHeader {
-// 		return
-// 	}
-// 	w.status = statusCode
-// 	fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", w.status, http.StatusText(w.status))
-// 	w.headers.Write(w.writer)
-// 	w.writer.WriteString("\r\n")
-// 	w.wroteHeader = true
-// }

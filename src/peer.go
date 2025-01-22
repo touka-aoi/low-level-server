@@ -26,7 +26,6 @@ func (p *Peer) Write(b []byte) (int, error) {
 }
 
 func (p *Peer) Close() error {
-	//close(p.writeChan)
 	err := unix.Close(int(p.Fd))
 	if err != nil {
 		return err

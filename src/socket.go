@@ -21,11 +21,6 @@ type Socket struct {
 }
 
 func CreateSocket() *Socket {
-	// システムコールを叩いてSocketを作る
-	// ノンブロッキング、プロセス継承なしでよさそう、tcpを選びたいので、SOCK_STREAMの0番でいいのかな
-	// 基本的にひとつのソケットタイプには一つのプロトコルが割り当てられる
-	// AF_INET | SOCK_STREAM なので 0でいいはず
-	// https://man7.org/linux/man-pages/man2/socket.2.html
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,
 		unix.AF_INET,
@@ -101,5 +96,5 @@ func (s *Socket) Close() error {
 		//MEMO: touka-aoi errono型を返すのが正しいのか考えたい
 		return errno
 	}
-  return nil
+	return nil
 }
