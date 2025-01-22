@@ -11,7 +11,7 @@ import (
 
 const (
 	Pagesize      = 4096
-	MaxBufferSize = 20 * 1024
+	MaxBufferSize = 20 * 1024 // 20kib
 )
 
 type EventType int

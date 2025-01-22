@@ -1,17 +1,17 @@
-package server
+package components
 
 import (
 	"golang.org/x/sys/unix"
 	"net/netip"
 )
 
-const maxOSFileDescriptor = 1 << 20
+const MaxOSFileDescriptor = 1 << 20
 
 type Peer struct {
 	Fd        int32
 	Ip        netip.AddrPort
 	Buffer    []byte
-	writeChan chan *Peer
+	WriteChan chan *Peer
 }
 
 func (p *Peer) Read(b []byte) (int, error) {
@@ -21,7 +21,7 @@ func (p *Peer) Read(b []byte) (int, error) {
 
 func (p *Peer) Write(b []byte) (int, error) {
 	p.Buffer = b
-	p.writeChan <- p
+	p.WriteChan <- p
 	return len(b), nil
 }
 
@@ -30,6 +30,6 @@ func (p *Peer) Close() error {
 	if err != nil {
 		return err
 	}
-	p.writeChan = nil
+	p.WriteChan = nil
 	return nil
 }

@@ -1,13 +1,12 @@
 package server
 
 import (
-	"bufio"
 	"context"
-	"fmt"
+	"github.com/touka-aoi/low-level-server/application/handler"
+	"github.com/touka-aoi/low-level-server/interface/components"
 	"github.com/touka-aoi/low-level-server/internal"
 	"golang.org/x/sys/unix"
 	"log/slog"
-	"net/http"
 	"net/netip"
 )
 
@@ -16,11 +15,11 @@ const maxConnection = 4096
 type Server struct {
 	uring         *internal.Uring
 	socket        *internal.Socket
-	AcceptChan    chan *Peer
-	sockLen       uint32
+	AcceptChan    chan *components.Peer
 	maxConnection int
-	writeChan     chan *Peer
-	peerContainer *PeerContainer
+	writeChan     chan *components.Peer
+	peerContainer *components.PeerContainer
+	handler       handler.Handler
 }
 
 func NewAcceptor() *Server {
@@ -29,12 +28,14 @@ func NewAcceptor() *Server {
 	ID := 1
 	uring := internal.CreateUring(maxConnection)
 	uring.RegisterRingBuffer(maxConnection, ID)
+	httpHandler := handler.NewHttpHandler()
 	return &Server{
 		socket:        socket,
 		uring:         uring,
 		maxConnection: maxConnection,
-		peerContainer: NewPeerContainer(),
-		writeChan:     make(chan *Peer, maxOSFileDescriptor),
+		peerContainer: components.NewPeerContainer(),
+		writeChan:     make(chan *components.Peer, components.MaxOSFileDescriptor),
+		handler:       httpHandler,
 	}
 }
 
@@ -98,7 +99,7 @@ func (a *Server) serverLoop(ctx context.Context) {
 	}
 }
 
-func (a *Server) watchPeer(peer *Peer) {
+func (a *Server) watchPeer(peer *components.Peer) {
 	a.uring.WatchReadMultiShot(peer.Fd)
 }
 
@@ -117,10 +118,10 @@ func (a *Server) handleAccept(ctx context.Context, cqe *internal.UringCQE) {
 		addr := netip.AddrFrom4(sa.Addr)
 		ip := netip.AddrPortFrom(addr, uint16(sa.Port))
 
-		peer := &Peer{
+		peer := &components.Peer{
 			Fd:        cqe.Res,
 			Ip:        ip,
-			writeChan: a.writeChan,
+			WriteChan: a.writeChan,
 		}
 		slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
 
@@ -141,18 +142,10 @@ func (a *Server) handleRead(ctx context.Context, cqe *internal.UringCQE) {
 	a.uring.Read(buffer)
 	peer.Buffer = buffer
 
-	// applicaition handler に渡す
-	req, err := http.ReadRequest(bufio.NewReader(peer))
+	err := a.handler.OnRead(ctx, peer, buffer)
 	if err != nil {
-		slog.Error("ReadRequest", "err", err)
+		slog.ErrorContext(ctx, "Handler OnRead", "err", err)
 	}
-	slog.Info("Read", "method", req.Method, "url", req.URL, "req", req)
-
-	// 200 OK を返す
-	body := "hello! I'm go server !"
-	contentLen := len(body)
-	response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", contentLen, body)
-	peer.Write([]byte(response))
 }
 
 func (a *Server) handleWrite(ctx context.Context, cqe *internal.UringCQE) {
