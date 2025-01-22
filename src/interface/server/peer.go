@@ -30,5 +30,6 @@ func (p *Peer) Close() error {
 	if err != nil {
 		return err
 	}
+	p.writeChan = nil
 	return nil
 }
