@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	server "github.com/touka-aoi/low-level-server"
+	"github.com/touka-aoi/low-level-server/interface/server"
 	"log/slog"
 	"net/netip"
 	"os"

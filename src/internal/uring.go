@@ -1,4 +1,4 @@
-package server
+package internal
 
 import (
 	"log/slog"
@@ -63,11 +63,10 @@ type Uring struct {
 	CQ            CQ
 	sockAddr      sockAddr
 	sockLen       uint32
-	AccpetChan    chan Peer
 	Buffer        []byte
 	PBufRing      []byte
 	pBufRingUnuse []byte // 使用しない GC対策
-	AcceptBuffer  []byte
+	ProvideBuffer []byte
 }
 
 type SQ struct {
@@ -161,16 +160,14 @@ func CreateUring(entries uint32) *Uring {
 			Mask:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.RingMask))),
 			CQEs:    (*uint32)(unsafe.Pointer(CQPtr + uintptr(params.CQOffsets.CQEs))),
 		},
-		AccpetChan: make(chan Peer, 1024),
 	}
 
 	return uring
 
 }
 
-func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
-	// maxConnectionは外部から注入できた方がいいね
-	size := maxConnection * int(unsafe.Sizeof(uringBufReg{}))
+func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
+	size := entries * int(unsafe.Sizeof(uringBufReg{}))
 	p := make([]byte, size+Pagesize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
 	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
@@ -181,7 +178,7 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 
 	reg := &uringBufReg{
 		RingAddr:    uint64(ptr),
-		RingEntries: uint32(maxConnection),
+		RingEntries: uint32(entries),
 		Bgid:        uint16(bufferGroupID),
 	}
 
@@ -199,22 +196,20 @@ func (u *Uring) RegisterRingBuffer(bufferGroupID int) {
 		panic(errno)
 	}
 
-	// uringBufRingとして扱う
-	uringBufRing := make([]byte, maxConnection*MaxBufferSize)
-	for i := 0; i < maxConnection; i++ {
+	uringBufRing := make([]byte, entries*MaxBufferSize)
+	for i := 0; i < entries; i++ {
 		b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[i*int(unsafe.Sizeof(uringBuf{}))]))
 		b.Addr = uint64(uintptr(unsafe.Pointer(&uringBufRing[i*int(MaxBufferSize)])))
 		b.Bid = uint16(i)
 		b.Len = uint32(MaxBufferSize)
 	}
-	u.AcceptBuffer = uringBufRing
+	u.ProvideBuffer = uringBufRing
 
 	//TODO ここにメモリバリアを設置したい
 	b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[0]))
-	b.Resv = maxConnection
+	b.Resv = uint16(entries)
 
 	slog.Info("io-uring register provide buffer success")
-
 }
 
 func (u *Uring) EncodeUserData(eventType EventType, fd int32) uint64 {
@@ -225,7 +220,7 @@ func (u *Uring) DecodeUserData(userData uint64) (EventType, int32) {
 	return EventType(userData >> 32), int32(userData & 0xffffffff)
 }
 
-func (u *Uring) AccpetMultishot(socket *Socket, sockAddr *sockAddr, sockLen *uint32) {
+func (u *Uring) AccpetMultishot(socket *Socket) {
 	op := &UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
@@ -317,7 +312,7 @@ func (u *Uring) WaitEvent() (*UringCQE, error) {
 }
 
 func (u *Uring) Read(buffer []byte) {
-	copy(buffer, u.AcceptBuffer[:len(buffer)])
+	copy(buffer, u.ProvideBuffer[:len(buffer)])
 }
 
 func (u *Uring) getCQE() *UringCQE {

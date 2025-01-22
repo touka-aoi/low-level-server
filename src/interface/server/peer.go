@@ -32,26 +32,3 @@ func (p *Peer) Close() error {
 	}
 	return nil
 }
-
-type PeerAcceptor [maxOSFileDescriptor]*Peer
-
-func NewPeerAcceptor() *PeerAcceptor {
-	return &PeerAcceptor{}
-}
-
-func (p *PeerAcceptor) GetPeer(fd int32) *Peer {
-	return p[fd&maxOSFileDescriptor]
-}
-
-func (p *PeerAcceptor) RegisterPeer(fd int32, peer *Peer) {
-	p[fd&maxOSFileDescriptor] = peer
-}
-
-func (p *PeerAcceptor) UnregisterPeer(fd int32) {
-	peer := p[fd&maxOSFileDescriptor]
-	if peer == nil {
-		return
-	}
-	peer.Close()
-	p[fd&maxOSFileDescriptor] = nil
-}
