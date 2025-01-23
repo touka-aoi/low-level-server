@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"github.com/touka-aoi/low-level-server/interface/components"
 	"log/slog"
 	"runtime"
 	"sync/atomic"
@@ -228,9 +229,12 @@ func (u *Uring) AccpetMultishot(socket *Socket) {
 		UserData: u.EncodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
-	u.pushSQE(op)
-	u.sendSQE()
+	u.Submit(op)
+}
 
+func (u *Uring) Submit(op *UringSQE) {
+	_ = u.pushSQE(op)
+	u.sendSQE()
 }
 
 func (u *Uring) Write(fd int32, buffer []byte) {
@@ -243,8 +247,7 @@ func (u *Uring) Write(fd int32, buffer []byte) {
 		UserData: u.EncodeUserData(EVENT_TYPE_WRITE, fd),
 	}
 
-	u.pushSQE(op)
-	u.sendSQE()
+	u.Submit(op)
 }
 
 func (u *Uring) WatchReadMultiShot(fd int32) {
@@ -256,11 +259,17 @@ func (u *Uring) WatchReadMultiShot(fd int32) {
 		BufIndex: 1,
 	}
 
-	u.pushSQE(op)
-	u.sendSQE()
+	u.Submit(op)
 }
 
 func (u *Uring) pushSQE(op *UringSQE) {
+
+	head, tail := atomic.LoadUint32(u.SQ.Head), atomic.LoadUint32(u.SQ.Tail)
+	if tail-head >= *u.SQ.Entries {
+		slog.Warn("sq entries full", "tail", tail, "head", head)
+		return components.ErrWouldBlock
+	}
+
 	for {
 		tail := atomic.LoadUint32(u.SQ.Tail)
 

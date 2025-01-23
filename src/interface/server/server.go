@@ -11,6 +11,7 @@ import (
 )
 
 const maxConnection = 4096
+const retryCapacity = 4096
 
 type Server struct {
 	uring         *internal.Uring
@@ -18,6 +19,7 @@ type Server struct {
 	AcceptChan    chan *components.Peer
 	maxConnection int
 	writeChan     chan *components.Peer
+	retryChan     chan *internal.UringSQE
 	peerContainer *components.PeerContainer
 	handler       handler.Handler
 }
@@ -35,6 +37,7 @@ func NewAcceptor() *Server {
 		maxConnection: maxConnection,
 		peerContainer: components.NewPeerContainer(),
 		writeChan:     make(chan *components.Peer, components.MaxOSFileDescriptor),
+		retryChan:     make(chan *internal.UringSQE, retryCapacity),
 		handler:       httpHandler,
 	}
 }
@@ -96,6 +99,12 @@ func (a *Server) serverLoop(ctx context.Context) {
 				a.handleRead(ctx, cqe)
 			}
 		}
+
+		//select {
+		//case op := <-a.retryChan:
+		//	a.uring.Submit(op)
+		//default:
+		//}
 	}
 }
 
@@ -110,8 +119,10 @@ func (a *Server) handleAccept(ctx context.Context, cqe *internal.UringCQE) {
 		return
 	}
 
-	// IORING_CQE_F_MOREフラグをチェクし、何か問題が起きていないか確認する
-	// 問題が起きていた場合、再度Accpet_MultiShotを行う
+	if cqe.Flags&internal.IORING_CQE_F_MORE == 0 {
+		eventType, sourceFD := a.uring.DecodeUserData(cqe.UserData)
+		slog.WarnContext(ctx, "IORING_CQE_F_MORE", "res", cqe.Res, "eventType", eventType, "sourceFD", sourceFD)
+	}
 
 	switch sa := sockaddr.(type) {
 	case *unix.SockaddrInet4:
@@ -131,12 +142,17 @@ func (a *Server) handleAccept(ctx context.Context, cqe *internal.UringCQE) {
 }
 
 func (a *Server) handleRead(ctx context.Context, cqe *internal.UringCQE) {
-	_, sourceFD := a.uring.DecodeUserData(cqe.UserData)
+	evenType, sourceFD := a.uring.DecodeUserData(cqe.UserData)
 	if cqe.Res < 1 {
 		slog.InfoContext(ctx, "EOF", "fd", sourceFD)
 		a.peerContainer.UnregisterPeer(sourceFD)
 		return
 	}
+
+	if cqe.Flags&internal.IORING_CQE_F_MORE == 0 {
+		slog.WarnContext(ctx, "IORING_CQE_F_MORE", "res", cqe.Res, "eventType", evenType, "sourceFD", sourceFD)
+	}
+
 	peer := a.peerContainer.GetPeer(sourceFD)
 	buffer := make([]byte, cqe.Res)
 	a.uring.Read(buffer)
