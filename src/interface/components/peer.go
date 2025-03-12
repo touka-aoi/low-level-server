@@ -45,11 +45,10 @@ func (p *Peer) Write(b []byte) (int, error) {
 	if (p.tail)+len(b) >= maxBufferSize {
 		copy(p.Buffer[p.tail:], b[:maxBufferSize-p.tail])
 		copy(p.Buffer[0:], b[maxBufferSize-p.tail:])
-		p.tail = len(b) - (maxBufferSize - p.tail&maxBufferSizeMask)
 	} else {
 		copy(p.Buffer[p.tail:], b)
-		p.tail = (p.tail & maxBufferSizeMask) + len(b)
 	}
+	p.tail = p.tail + len(b)&maxBufferSizeMask
 	return len(b), nil
 }
 
