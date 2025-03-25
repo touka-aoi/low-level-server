@@ -262,7 +262,7 @@ func (u *Uring) WatchReadMultiShot(fd int32) {
 	u.Submit(op)
 }
 
-func (u *Uring) pushSQE(op *UringSQE) {
+func (u *Uring) pushSQE(op *UringSQE) error {
 
 	head, tail := atomic.LoadUint32(u.SQ.Head), atomic.LoadUint32(u.SQ.Tail)
 	if tail-head >= *u.SQ.Entries {
@@ -284,6 +284,7 @@ func (u *Uring) pushSQE(op *UringSQE) {
 		}
 		runtime.Gosched()
 	}
+	return nil
 }
 
 func (u *Uring) sendSQE() {

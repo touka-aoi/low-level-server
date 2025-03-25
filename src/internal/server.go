@@ -1,11 +1,17 @@
-package server
+package internal
 
 import (
-	"context"
+  "bufio"
+  "context"
+	"errors"
 	"github.com/touka-aoi/low-level-server/application/handler"
+	"github.com/touka-aoi/low-level-server/application/handler/game"
+	gen "github.com/touka-aoi/low-level-server/gen/proto"
 	"github.com/touka-aoi/low-level-server/interface/components"
-	"github.com/touka-aoi/low-level-server/internal"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/encoding/protodelim"
+	"google.golang.org/protobuf/proto"
+	"io"
 	"log/slog"
 	"net/netip"
 )
@@ -14,21 +20,21 @@ const maxConnection = 4096
 const retryCapacity = 4096
 
 type Server struct {
-	uring         *internal.Uring
-	socket        *internal.Socket
+	uring         *Uring
+	socket        *Socket
 	AcceptChan    chan *components.Peer
 	maxConnection int
 	writeChan     chan *components.Peer
-	retryChan     chan *internal.UringSQE
+	retryChan     chan *UringSQE
 	peerContainer *components.PeerContainer
-	handler       handler.Handler
+	handler       game.Handler
 }
 
 func NewAcceptor() *Server {
-	socket := internal.CreateSocket()
+	socket := CreateSocket()
 	//TODO: touka-aoi refactor option structure
 	ID := 1
-	uring := internal.CreateUring(maxConnection)
+	uring := CreateUring(maxConnection)
 	uring.RegisterRingBuffer(maxConnection, ID)
 	httpHandler := handler.NewHttpHandler()
 	return &Server{
@@ -37,7 +43,7 @@ func NewAcceptor() *Server {
 		maxConnection: maxConnection,
 		peerContainer: components.NewPeerContainer(),
 		writeChan:     make(chan *components.Peer, components.MaxOSFileDescriptor),
-		retryChan:     make(chan *internal.UringSQE, retryCapacity),
+		retryChan:     make(chan *UringSQE, retryCapacity),
 		handler:       httpHandler,
 	}
 }
@@ -60,19 +66,9 @@ func (a *Server) Listen(address string) error {
 }
 
 func (a *Server) Serve(ctx context.Context) {
-	go a.serverLoop(ctx)
-
-	<-ctx.Done()
-}
-
-func (a *Server) accept() {
-	a.uring.AccpetMultishot(a.socket)
-}
-
-func (a *Server) serverLoop(ctx context.Context) {
 	slog.InfoContext(ctx, "serverLoop start")
 
-	a.accept()
+	a.uring.AccpetMultishot(a.socket)
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,11 +87,11 @@ func (a *Server) serverLoop(ctx context.Context) {
 			slog.InfoContext(ctx, "CQE", "cqe res", cqe.Res, "event Type", eventType, "fd", sourceFD)
 
 			switch eventType {
-			case internal.EVENT_TYPE_ACCEPT:
+			case EVENT_TYPE_ACCEPT:
 				a.handleAccept(ctx, cqe)
-			case internal.EVENT_TYPE_WRITE:
+			case EVENT_TYPE_WRITE:
 				a.handleWrite(ctx, cqe)
-			case internal.EVENT_TYPE_READ:
+			case EVENT_TYPE_READ:
 				a.handleRead(ctx, cqe)
 			}
 		}
@@ -108,40 +104,44 @@ func (a *Server) serverLoop(ctx context.Context) {
 	}
 }
 
-func (a *Server) watchPeer(peer *components.Peer) {
-	a.uring.WatchReadMultiShot(peer.Fd)
-}
-
-func (a *Server) handleAccept(ctx context.Context, cqe *internal.UringCQE) {
+func (a *Server) handleAccept(ctx context.Context, cqe *UringCQE) {
 	sockaddr, err := unix.Getpeername(int(cqe.Res))
 	if err != nil {
 		slog.ErrorContext(ctx, "Getpeername", "err", err)
 		return
 	}
 
-	if cqe.Flags&internal.IORING_CQE_F_MORE == 0 {
+	if cqe.Flags&IORING_CQE_F_MORE == 0 {
 		eventType, sourceFD := a.uring.DecodeUserData(cqe.UserData)
 		slog.WarnContext(ctx, "IORING_CQE_F_MORE", "res", cqe.Res, "eventType", eventType, "sourceFD", sourceFD)
 	}
 
+	// ここは大げさすぎるな 必要なのはremoteAddrだけ
+	// peerがwriteしたいものを持つのは良さそう chanしたらしんどすぎる
+	//
 	switch sa := sockaddr.(type) {
 	case *unix.SockaddrInet4:
 		addr := netip.AddrFrom4(sa.Addr)
 		ip := netip.AddrPortFrom(addr, uint16(sa.Port))
 
 		peer := &components.Peer{
+      r: bufio.NewReader(何を入れたらいいかはわかってない),
+      decode: s.ReadCodec
+      encoder: s.WriteCodec
+      w: 書く先
 			Fd:        cqe.Res,
 			Ip:        ip,
 			WriteChan: a.writeChan,
 		}
 		slog.InfoContext(ctx, "Accept", "fd", peer.Fd, "ip", peer.Ip)
 
-		a.watchPeer(peer)
+		a.uring.WatchReadMultiShot(peer.Fd)
 		a.peerContainer.RegisterPeer(peer.Fd, peer)
 	}
 }
 
-func (a *Server) handleRead(ctx context.Context, cqe *internal.UringCQE) {
+// ここ10ms以下にしたい
+func (a *Server) handleRead(ctx context.Context, cqe *UringCQE) {
 	evenType, sourceFD := a.uring.DecodeUserData(cqe.UserData)
 	if cqe.Res < 1 {
 		slog.InfoContext(ctx, "EOF", "fd", sourceFD)
@@ -149,7 +149,7 @@ func (a *Server) handleRead(ctx context.Context, cqe *internal.UringCQE) {
 		return
 	}
 
-	if cqe.Flags&internal.IORING_CQE_F_MORE == 0 {
+	if cqe.Flags&IORING_CQE_F_MORE == 0 {
 		slog.WarnContext(ctx, "IORING_CQE_F_MORE", "res", cqe.Res, "eventType", evenType, "sourceFD", sourceFD)
 	}
 
@@ -157,14 +157,41 @@ func (a *Server) handleRead(ctx context.Context, cqe *internal.UringCQE) {
 	buffer := make([]byte, cqe.Res)
 	a.uring.Read(buffer)
 	peer.Buffer = buffer
-
-	err := a.handler.OnRead(ctx, peer, buffer)
+	var message gen.Envelope
+	// bufferはio.Bufferedにしないと
+	err := protodelim.UnmarshalFrom(buffer, &message)
 	if err != nil {
-		slog.ErrorContext(ctx, "Handler OnRead", "err", err)
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			// 何もしない
+			return
+		}
+		slog.ErrorContext(ctx, "UnmarshalFrom", "err", err)
+		// UnmarshalFromでエラーが起こった時どうしたらいいんだろうか...
 	}
+
+	switch message.WhichPayload() {
+	case gen.Envelope_PlayerAction_case:
+		// 何かする
+		playerAction := message.GetPlayerAction()
+		// ロジックサーバーに処理をおくる
+		// resutlを返す
+		var result gen.ActionResult
+		data, err := proto.Marshal(&result)
+		if err != nil {
+			slog.ErrorContext(ctx, "proto.Marshal", "err", err)
+		}
+		peer.Buffer = data
+		a.writeChan <- peer
+	case gen.Envelope_StatusRequest_case:
+		statusRequest := message.GetStatusRequest()
+	// 何かする
+	case gen.Envelope_Payload_not_set_case:
+		// 何もしない
+	}
+
 }
 
-func (a *Server) handleWrite(ctx context.Context, cqe *internal.UringCQE) {
+func (a *Server) handleWrite(ctx context.Context, cqe *UringCQE) {
 	_, fd := a.uring.DecodeUserData(cqe.UserData)
 	peer := a.peerContainer.GetPeer(fd)
 	slog.ErrorContext(ctx, "Write", "peer", peer, "res", cqe.Res)

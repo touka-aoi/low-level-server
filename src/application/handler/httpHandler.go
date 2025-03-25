@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/touka-aoi/low-level-server/application/handler/game"
 	"github.com/touka-aoi/low-level-server/interface/components"
 	"log/slog"
 	"net/http"
@@ -30,6 +31,6 @@ func (h *HttpHandler) OnRead(ctx context.Context, peer *components.Peer, buffer 
 	return nil
 }
 
-func NewHttpHandler() Handler {
+func NewHttpHandler() game.Handler {
 	return &HttpHandler{}
 }
