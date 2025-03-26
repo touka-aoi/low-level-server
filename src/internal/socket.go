@@ -2,7 +2,6 @@ package internal
 
 import (
 	"encoding/binary"
-	"log"
 	"net/netip"
 	"unsafe"
 
@@ -19,7 +18,23 @@ type Socket struct {
 	LocalAddr string
 }
 
-func CreateSocket() *Socket {
+func Listen(network, address string, maxConnections int) (*Socket, error) {
+	switch network {
+	case "tcp":
+		addr, err := netip.ParseAddrPort(address)
+		if err != nil {
+			return nil, err
+		}
+		s := createSocket()
+		s.bind(addr)
+		s.listen(maxConnections)
+		return s, nil
+	}
+
+	return nil, nil
+}
+
+func createSocket() *Socket {
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,
 		unix.AF_INET,
@@ -30,14 +45,13 @@ func CreateSocket() *Socket {
 		0)
 
 	if fd < 0 {
-		log.Printf("Socket failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
 
 	return &Socket{Fd: int32(fd)}
 }
 
-func (s *Socket) Bind(address netip.AddrPort) {
+func (s *Socket) bind(address netip.AddrPort) {
 	// https://man7.org/linux/man-pages/man2/bind.2.html
 	sockaddr := sockAddr{
 		Family: unix.AF_INET,
@@ -61,14 +75,13 @@ func (s *Socket) Bind(address netip.AddrPort) {
 		0)
 
 	if res != 0 {
-		log.Printf("Bind failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
 
 	s.LocalAddr = address.String()
 }
 
-func (s *Socket) Listen(maxConn int) {
+func (s *Socket) listen(maxConn int) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_LISTEN,
 		uintptr(s.Fd),
@@ -79,7 +92,6 @@ func (s *Socket) Listen(maxConn int) {
 		0)
 
 	if res != 0 {
-		log.Printf("Listen failed with errno: %d (%s)", errno, errno.Error())
 		panic(errno)
 	}
 }

@@ -6,7 +6,14 @@ import (
 	"log/slog"
 )
 
+type ServerConfig struct {
+	ExternalAddress     string
+	Protocol            string
+	ListenMaxConnection int
+}
+
 type Server struct {
+	cfg            ServerConfig
 	socket         *internal.Socket
 	internalServer *internal.Server2
 }

@@ -90,7 +90,7 @@ func (a *Server) Serve(ctx context.Context) {
 			case EVENT_TYPE_ACCEPT:
 				a.handleAccept(ctx, cqe)
 			case EVENT_TYPE_WRITE:
-				a.handleWrite(ctx, cqe)
+				a.handleWrite(ctx, cqe) // writeは書き込んだよ～の完了報告
 			case EVENT_TYPE_READ:
 				a.handleRead(ctx, cqe)
 			}
