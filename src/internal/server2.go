@@ -4,6 +4,14 @@ import (
 	"context"
 	"github.com/touka-aoi/low-level-server/interface/server"
 	"sync"
+	"sync/atomic"
+)
+
+const (
+	ServerInitialized = iota
+	ServerStarted
+	ServerPrepareClosing
+	ServerClosed
 )
 
 type Server2 struct {
@@ -11,6 +19,8 @@ type Server2 struct {
 	listener *Socket
 	network  string // iouring, epoll, kqueeeの実装が入ってきても許されるIFと交換
 	wg       sync.WaitGroup
+	state    atomic.Int32
+	once     sync.Once
 }
 
 func NewServer2() *Server2 {
@@ -36,47 +46,47 @@ func (s *Server2) AddHandler(h any) {
 	s.handler = h
 }
 
+// ここでフレーミングを吸収する
+func (s *Server2) handleData(event eventType, data []byte) {
+	// peerを取得する
+	event, err := s.ReadCodec.Decode(event)
+	if err != nil {
+		// handle error
+
+	}
+	s.handleEvent(event)
+}
+
+// ここに来る頃にはすでにパースされている
+func (s *Server2) handleEvent(event any) {
+	switch event.(type) {
+	case EVENT_TYPE_ACCEPT:
+		s.handleAccept(event)
+	case EVENT_TYPE_WRITE:
+		// 何もしない
+	case EVENT_TYPE_READ:
+		s.handler.handleData(event)
+	case EVENT_TYPE_CLOSE:
+	}
+}
+
 func (s *Server2) Serve(ctx context.Context) {
 	s.listener.Accept()
-
-	wg := sync.WaitGroup{}
-	go func() {
-		defer wg.Done()
-		for {
-			if s.state.Load() == ServerPrepareClosing {
-				// Acceptを止める命令を出す
-				// 一度だけ出したいけど、どうするかここは無限にループするので
-			}
-			// データを受けとる
-			data := s.listener.ReceiveData() // receivedata内でサーバーステータスの情報を処理するしか...
-			// でもlistenerは別構造体か
-			s.handleEvent(data) // handleEventの中でイベントごとにhandler.handleData2()<-名前募集を入れたらいいか
-
-			// がなくなったら終了させたい
-			if ctx.Done() {
-				break
-			}
-
-			// Acceptを受け取る
-
-			// ↑イベントをハンドリングしている
-
-			// データをハンドリングする
-			// フレーミングのためにPeerにする
-			// 論理処理はイベントキューに詰める
-			// 処理を書いてるんじゃなくてIOを書いてる <- これ
-
-			// データを書き込む
-
-			event := s.listener.receiveEvent()
-			data := s.handleEvent(event)
-			s.handler.handleData(data)
+	for {
+		if s.state.Load() == ServerPrepareClosing {
+			s.once.Do(s.listener.PrepareClose())
 		}
-	}()
+		// この時点でdecoder, encoderがセットされてないとだめなのか
+		peer := s.listener.ReceiveData()
+		s.handleData(peer)
+
+		// peerのcloseを待つ感じかな
+		if ctx.Done() {
+			break
+		}
+	}
 
 	if s.state.Load() <= ServerPrepareClosing {
 		s.state.Store(ServerClosed)
 	}
-
-	s.wg.Wait()
 }
