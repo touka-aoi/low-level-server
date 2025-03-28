@@ -47,8 +47,8 @@ func (s *Server2) AddHandler(h any) {
 }
 
 // ここでフレーミングを吸収する
-func (s *Server2) handleData(event eventType, data []byte) {
-	// peerを取得する
+func (s *Server2) handleData(data []byte) {
+	// ここわからん
 	event, err := s.ReadCodec.Decode(event)
 	if err != nil {
 		// handle error
