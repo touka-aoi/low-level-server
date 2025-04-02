@@ -18,22 +18,6 @@ type Socket struct {
 	LocalAddr string
 }
 
-func Listen(network, address string, maxConnections int) (*Socket, error) {
-	switch network {
-	case "tcp":
-		addr, err := netip.ParseAddrPort(address)
-		if err != nil {
-			return nil, err
-		}
-		s := createSocket()
-		s.bind(addr)
-		s.listen(maxConnections)
-		return s, nil
-	}
-
-	return nil, nil
-}
-
 func createSocket() *Socket {
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,

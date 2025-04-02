@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"github.com/touka-aoi/low-level-server/interface/server"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 )
@@ -14,9 +15,46 @@ const (
 	ServerClosed
 )
 
+type TCPListener struct {
+	socket   *Socket
+	acceptor Acceptor
+}
+
+type Acceptor interface {
+	Accept() error
+}
+
+func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener, error) {
+	switch protocol {
+	case "tcp":
+		addr, err := netip.ParseAddrPort(externalAddress)
+		if err != nil {
+			return nil, err
+		}
+
+		s := createSocket()
+		s.bind(addr)
+		s.listen(listenMaxConnection)
+
+		return &TCPListener{
+			socket: s,
+		}, nil
+	}
+
+	return nil, nil
+}
+
+func (l *TCPListener) Accept() error {
+	return nil
+}
+
+type Listener interface {
+	Accept() error
+}
+
 type Server2 struct {
 	cfg      server.ServerConfig
-	listener *Socket
+	listener *Listener
 	network  string // iouring, epoll, kqueeeの実装が入ってきても許されるIFと交換
 	wg       sync.WaitGroup
 	state    atomic.Int32
