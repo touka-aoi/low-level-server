@@ -1,11 +1,15 @@
-package internal
+//go:build linux
+
+package io
 
 import (
-	"github.com/touka-aoi/low-level-server/interface/components"
 	"log/slog"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/touka-aoi/low-level-server/interface/components"
+	"github.com/touka-aoi/low-level-server/internal"
 
 	"golang.org/x/sys/unix"
 )
@@ -14,27 +18,6 @@ const (
 	Pagesize      = 4096
 	MaxBufferSize = 20 * 1024 // 20kib
 )
-
-type EventType int
-
-const (
-	EVENT_TYPE_ACCEPT EventType = iota
-	EVENT_TYPE_READ
-	EVENT_TYPE_WRITE
-)
-
-func (et EventType) String() string {
-	switch et {
-	case EVENT_TYPE_ACCEPT:
-		return "EVENT_TYPE_ACCEPT"
-	case EVENT_TYPE_READ:
-		return "EVENT_TYPE_READ"
-	case EVENT_TYPE_WRITE:
-		return "EVENT_TYPE_WRITE"
-	default:
-		return "UNKNOWN"
-	}
-}
 
 type UringSQE struct {
 	Opcode      uint8
@@ -213,12 +196,12 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 	slog.Info("io-uring register provide buffer success")
 }
 
-func (u *Uring) EncodeUserData(eventType EventType, fd int32) uint64 {
+func (u *Uring) EncodeUserData(eventType internal.EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (u *Uring) DecodeUserData(userData uint64) (EventType, int32) {
-	return EventType(userData >> 32), int32(userData & 0xffffffff)
+func (u *Uring) DecodeUserData(userData uint64) (internal.EventType, int32) {
+	return internal.EventType(userData >> 32), int32(userData & 0xffffffff)
 }
 
 func (u *Uring) AccpetMultishot(socket *Socket) {
@@ -226,7 +209,7 @@ func (u *Uring) AccpetMultishot(socket *Socket) {
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
-		UserData: u.EncodeUserData(EVENT_TYPE_ACCEPT, socket.Fd),
+		UserData: u.EncodeUserData(internal.EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
 	u.Submit(op)
@@ -244,7 +227,7 @@ func (u *Uring) Write(fd int32, buffer []byte) {
 		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
 		Flags:    IOSQE_CQE_SKIP_SUCCESS,
 		Len:      uint32(len(buffer)),
-		UserData: u.EncodeUserData(EVENT_TYPE_WRITE, fd),
+		UserData: u.EncodeUserData(internal.EVENT_TYPE_WRITE, fd),
 	}
 
 	u.Submit(op)
@@ -255,7 +238,7 @@ func (u *Uring) WatchReadMultiShot(fd int32) {
 		Opcode:   IORING_OP_READ_MULTISHOT,
 		Fd:       fd,
 		Flags:    IOSQE_BUFFER_SELECT,
-		UserData: u.EncodeUserData(EVENT_TYPE_READ, fd),
+		UserData: u.EncodeUserData(internal.EVENT_TYPE_READ, fd),
 		BufIndex: 1,
 	}
 

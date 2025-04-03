@@ -1,4 +1,6 @@
-package internal
+//go:build linux
+
+package io
 
 import (
 	"encoding/binary"
@@ -18,7 +20,7 @@ type Socket struct {
 	LocalAddr string
 }
 
-func createSocket() *Socket {
+func CreateSocket() *Socket {
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,
 		unix.AF_INET,
@@ -35,7 +37,7 @@ func createSocket() *Socket {
 	return &Socket{Fd: int32(fd)}
 }
 
-func (s *Socket) bind(address netip.AddrPort) {
+func (s *Socket) Bind(address netip.AddrPort) {
 	// https://man7.org/linux/man-pages/man2/bind.2.html
 	sockaddr := sockAddr{
 		Family: unix.AF_INET,
@@ -65,7 +67,7 @@ func (s *Socket) bind(address netip.AddrPort) {
 	s.LocalAddr = address.String()
 }
 
-func (s *Socket) listen(maxConn int) {
+func (s *Socket) Listen(maxConn int) {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_LISTEN,
 		uintptr(s.Fd),
