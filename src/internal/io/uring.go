@@ -9,7 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/touka-aoi/low-level-server/interface/components"
-	"github.com/touka-aoi/low-level-server/internal"
+	"github.com/touka-aoi/low-level-server/internal/event"
 
 	"golang.org/x/sys/unix"
 )
@@ -196,12 +196,12 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 	slog.Info("io-uring register provide buffer success")
 }
 
-func (u *Uring) EncodeUserData(eventType internal.EventType, fd int32) uint64 {
+func (u *Uring) EncodeUserData(eventType event.EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (u *Uring) DecodeUserData(userData uint64) (internal.EventType, int32) {
-	return internal.EventType(userData >> 32), int32(userData & 0xffffffff)
+func (u *Uring) DecodeUserData(userData uint64) (event.EventType, int32) {
+	return event.EventType(userData >> 32), int32(userData & 0xffffffff)
 }
 
 func (u *Uring) AccpetMultishot(socket *Socket) {
@@ -209,7 +209,7 @@ func (u *Uring) AccpetMultishot(socket *Socket) {
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       socket.Fd,
-		UserData: u.EncodeUserData(internal.EVENT_TYPE_ACCEPT, socket.Fd),
+		UserData: u.EncodeUserData(event.EVENT_TYPE_ACCEPT, socket.Fd),
 	}
 
 	u.Submit(op)
@@ -227,7 +227,7 @@ func (u *Uring) Write(fd int32, buffer []byte) {
 		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
 		Flags:    IOSQE_CQE_SKIP_SUCCESS,
 		Len:      uint32(len(buffer)),
-		UserData: u.EncodeUserData(internal.EVENT_TYPE_WRITE, fd),
+		UserData: u.EncodeUserData(event.EVENT_TYPE_WRITE, fd),
 	}
 
 	u.Submit(op)
@@ -238,7 +238,7 @@ func (u *Uring) WatchReadMultiShot(fd int32) {
 		Opcode:   IORING_OP_READ_MULTISHOT,
 		Fd:       fd,
 		Flags:    IOSQE_BUFFER_SELECT,
-		UserData: u.EncodeUserData(internal.EVENT_TYPE_READ, fd),
+		UserData: u.EncodeUserData(event.EVENT_TYPE_READ, fd),
 		BufIndex: 1,
 	}
 
