@@ -9,6 +9,7 @@ import (
 )
 
 type Listener interface {
+	Fd() int32
 	Close() error
 }
 
@@ -38,4 +39,8 @@ func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener
 
 func (l *TCPListener) Close() error {
 	return nil
+}
+
+func (l *TCPListener) Fd() int32 {
+	return l.socket.Fd
 }

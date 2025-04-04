@@ -200,16 +200,12 @@ func (u *Uring) EncodeUserData(eventType event.EventType, fd int32) uint64 {
 	return (uint64(eventType) << 32) | uint64(fd)
 }
 
-func (u *Uring) DecodeUserData(userData uint64) (event.EventType, int32) {
-	return event.EventType(userData >> 32), int32(userData & 0xffffffff)
-}
-
-func (u *Uring) AccpetMultishot(socket *Socket) {
+func (u *Uring) AccpetMultishot(fd int32) {
 	op := &UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
-		Fd:       socket.Fd,
-		UserData: u.EncodeUserData(event.EVENT_TYPE_ACCEPT, socket.Fd),
+		Fd:       fd,
+		UserData: u.EncodeUserData(event.EVENT_TYPE_ACCEPT, fd),
 	}
 
 	u.Submit(op)

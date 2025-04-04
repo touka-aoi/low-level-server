@@ -5,11 +5,11 @@ package engine
 import (
 	"context"
 
-	"github.com/touka-aoi/low-level-server/internal"
+	"github.com/touka-aoi/low-level-server/internal/event"
 )
 
 type NetEvent struct {
-	EventType internal.EventType
+	EventType event.EventType
 	Fd        int32
 	Data      []byte
 }
