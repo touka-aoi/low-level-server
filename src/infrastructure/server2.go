@@ -15,10 +15,6 @@ const (
 	ServerClosed
 )
 
-// --------------------------------------------------
-// ここから下はServer2の実装
-// --------------------------------------------------
-
 type Server2 struct {
 	listener  *netEngine.Listener
 	network   string // iouring, epoll, kqueeeの実装が入ってきても許されるIFと交換

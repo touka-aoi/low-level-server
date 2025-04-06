@@ -300,6 +300,31 @@ func (u *Uring) WaitEvent() (*UringCQE, error) {
 	return u.getCQE(), nil
 }
 
+func (u *Uring) PeekBatchEvents(batch uint32) ([]*UringCQE, error) {
+	ready := u.cqReady()
+
+	if ready < 1 {
+		// WouldBlockにするか、他のエラーにするか悩むな
+		return nil, nil
+	}
+
+	if ready < batch {
+		batch = ready
+	}
+
+	// getCQEをforで呼び出すのがよさそうだな
+
+	return nil, nil
+}
+
+func (u *Uring) cqReady() uint32 {
+	head, tail := atomic.LoadUint32(u.CQ.Head), atomic.LoadUint32(u.CQ.Tail)
+	if head == tail {
+		return 0
+	}
+	return tail - head
+}
+
 func (u *Uring) Read(buffer []byte) {
 	copy(buffer, u.ProvideBuffer[:len(buffer)])
 }

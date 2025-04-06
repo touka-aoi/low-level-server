@@ -47,7 +47,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 
 	userData := e.decodeUserData(cqEvent.UserData)
 
-  netEvents := make([]*NetEvent, 0)
+	netEvents := make([]*NetEvent, 0)
 
 	return nil, nil
 }
