@@ -8,13 +8,10 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/touka-aoi/low-level-server/internal/event"
-
 	"golang.org/x/sys/unix"
 )
 
 const (
-	Pagesize      = 4096
 	MaxBufferSize = 20 * 1024 // 20kib
 )
 
@@ -41,15 +38,15 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd            int32
-	SQ            SQ
-	CQ            CQ
-	sockAddr      sockAddr
-	sockLen       uint32
-	Buffer        []byte
-	PBufRing      []byte
-	pBufRingUnuse []byte // 使用しない GC対策
-	ProvideBuffer []byte
+	Fd             int32
+	SQ             SQ
+	CQ             CQ
+	sockAddr       sockAddr
+	sockLen        uint32
+	Buffer         []byte
+	PBufRing       []byte
+	pBufRingMemory []byte // 使用しない GC対策
+	ProvideBuffer  []byte
 }
 
 type SQ struct {
@@ -150,14 +147,15 @@ func CreateUring(entries uint32) *Uring {
 }
 
 func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
+	pageSize := unix.Getpagesize()
 	size := entries * int(unsafe.Sizeof(uringBufReg{}))
-	p := make([]byte, size+Pagesize-1)
+	p := make([]byte, size+pageSize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
-	ptr = ((ptr + Pagesize - 1) & ^(uintptr(Pagesize - 1)))
+	ptr = ((ptr + uintptr(pageSize) - 1) & ^(uintptr(pageSize - 1)))
 	s := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size)
 
 	u.PBufRing = s
-	u.pBufRingUnuse = p
+	u.pBufRingMemory = p
 
 	reg := &uringBufReg{
 		RingAddr:    uint64(ptr),
@@ -195,19 +193,14 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 	slog.Info("io-uring register provide buffer success")
 }
 
-func (u *Uring) EncodeUserData(eventType event.EventType, fd int32) uint64 {
-	return (uint64(eventType) << 32) | uint64(fd)
-}
-
-func (u *Uring) AccpetMultishot(fd int32) {
+func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
 	op := &UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
 		Fd:       fd,
-		UserData: u.EncodeUserData(event.EVENT_TYPE_ACCEPT, fd),
+		UserData: userData,
 	}
-
-	u.Submit(op)
+	return op
 }
 
 func (u *Uring) Submit(op *UringSQE) {
@@ -215,25 +208,25 @@ func (u *Uring) Submit(op *UringSQE) {
 	u.sendSQE()
 }
 
-func (u *Uring) Write(fd int32, buffer []byte) {
+func (u *Uring) Write(fd int32, buffer []byte, userData uint64) {
 	op := &UringSQE{
 		Opcode:   IORING_OP_WRITE,
 		Fd:       fd,
 		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
 		Flags:    IOSQE_CQE_SKIP_SUCCESS,
 		Len:      uint32(len(buffer)),
-		UserData: u.EncodeUserData(event.EVENT_TYPE_WRITE, fd),
+		UserData: userData,
 	}
 
 	u.Submit(op)
 }
 
-func (u *Uring) WatchReadMultiShot(fd int32) {
+func (u *Uring) RegisterRead(fd int32, userData uint64) {
 	op := &UringSQE{
 		Opcode:   IORING_OP_READ_MULTISHOT,
 		Fd:       fd,
 		Flags:    IOSQE_BUFFER_SELECT,
-		UserData: u.EncodeUserData(event.EVENT_TYPE_READ, fd),
+		UserData: userData,
 		BufIndex: 1,
 	}
 
@@ -303,17 +296,23 @@ func (u *Uring) PeekBatchEvents(batch uint32) ([]*UringCQE, error) {
 	ready := u.cqReady()
 
 	if ready < 1 {
-		// WouldBlockにするか、他のエラーにするか悩むな
 		return nil, nil
 	}
 
-	if ready < batch {
+	if batch > ready {
 		batch = ready
 	}
 
-	// getCQEをforで呼び出すのがよさそうだな
+	cqes := make([]*UringCQE, batch)
+	for i := uint32(0); i < ready; i++ {
+		cqe := u.getCQE()
+		if cqe == nil {
+			panic("unexpected erorr: cqe is nil")
+		}
+		cqes = append(cqes, cqe)
+	}
 
-	return nil, nil
+	return cqes, nil
 }
 
 func (u *Uring) cqReady() uint32 {
@@ -322,10 +321,6 @@ func (u *Uring) cqReady() uint32 {
 		return 0
 	}
 	return tail - head
-}
-
-func (u *Uring) Read(buffer []byte) {
-	copy(buffer, u.ProvideBuffer[:len(buffer)])
 }
 
 func (u *Uring) getCQE() *UringCQE {
@@ -341,13 +336,6 @@ func (u *Uring) getCQE() *UringCQE {
 			cqes := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQEs)), *u.CQ.Entries)
 			cqe := cqes[head&*u.CQ.Mask]
 
-			if cqe.Res < 0 {
-				//MEMO: < 0 のときは-1をかけて正の値にしてあげる
-				err := unix.Errno(-cqe.Res)
-				slog.Error("CQE failed", "errno", unix.ErrnoName(err), "err", err.Error(), "errno", cqe.Res)
-				return nil
-			}
-
 			return &cqe
 		}
 
@@ -355,6 +343,10 @@ func (u *Uring) getCQE() *UringCQE {
 	}
 
 	return nil
+}
+
+func (u *Uring) Read(buffer []byte) {
+	copy(buffer, u.ProvideBuffer[:len(buffer)])
 }
 
 func (u *Uring) Close() error {

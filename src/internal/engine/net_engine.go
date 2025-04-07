@@ -16,7 +16,6 @@ type NetEvent struct {
 
 type NetEngine interface {
 	Accept(ctx context.Context, listener Listener) error
-	Up(ctx context.Context) error
 	ReceiveData(ctx context.Context) ([]*NetEvent, error)
 	PrepareClose() error
 	Close() error

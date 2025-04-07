@@ -4,8 +4,8 @@ package engine
 
 import (
 	"context"
-	"log/slog"
 
+	toukaerrors "github.com/touka-aoi/low-level-server/internal/errors"
 	"github.com/touka-aoi/low-level-server/internal/event"
 	"github.com/touka-aoi/low-level-server/internal/io"
 )
@@ -27,29 +27,45 @@ func NewUringNetEngine() *UringNetEngine {
 }
 
 func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
-	e.uring.AccpetMultishot(listener.Fd())
+	op := e.uring.AccpetMultishot(listener.Fd(), e.encodeUserData(event.EVENT_TYPE_ACCEPT, listener.Fd()))
+	e.uring.Submit(op)
 	return nil
 }
 
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
-	cqEvent, err := e.uring.WaitEvent()
+	cqEvent, err := e.uring.PeekBatchEvents(10)
 	if err != nil {
 		return nil, err
 	}
-	if cqEvent == nil {
-		return nil, nil
+	if len(cqEvent) == 0 {
+		return nil, toukaerrors.ErrWouldBlock
 	}
 
-	if cqEvent.UserData == 0 {
-		slog.WarnContext(ctx, "UserData is nil")
-		return nil, nil
+	for _, event := range cqEvent {
+		if event.Res < 0 {
+
+		}
+
 	}
 
 	return nil, nil
 }
 
-func (e *UringNetEngine) encodeUserData() {
+func (e *UringNetEngine) handleEvent() error {
 
+}
+
+func (e *UringNetEngine) PrepareClose() error {
+	return nil
+}
+
+func (e *UringNetEngine) Close() error {
+	return e.uring.Close()
+}
+
+func (e *UringNetEngine) encodeUserData(ev event.EventType, fd int32) uint64 {
+	userData := uint64(ev)<<32 | uint64(fd)
+	return userData
 }
 
 func (e *UringNetEngine) decodeUserData(data uint64) *userData {
