@@ -5,7 +5,6 @@ package engine
 import (
 	"context"
 
-	toukaerrors "github.com/touka-aoi/low-level-server/internal/errors"
 	"github.com/touka-aoi/low-level-server/internal/event"
 	"github.com/touka-aoi/low-level-server/internal/io"
 )
@@ -33,12 +32,9 @@ func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
 }
 
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
-	cqEvent, err := e.uring.PeekBatchEvents(10)
+	cqEvent, err := e.uring.PeekBatchEvents(1)
 	if err != nil {
 		return nil, err
-	}
-	if len(cqEvent) == 0 {
-		return nil, toukaerrors.ErrWouldBlock
 	}
 
 	for _, event := range cqEvent {
@@ -52,7 +48,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 }
 
 func (e *UringNetEngine) handleEvent() error {
-
+	return nil
 }
 
 func (e *UringNetEngine) PrepareClose() error {

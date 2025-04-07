@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	toukaerrors "github.com/touka-aoi/low-level-server/internal/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -296,7 +297,7 @@ func (u *Uring) PeekBatchEvents(batch uint32) ([]*UringCQE, error) {
 	ready := u.cqReady()
 
 	if ready < 1 {
-		return nil, nil
+		return nil, toukaerrors.ErrWouldBlock
 	}
 
 	if batch > ready {
