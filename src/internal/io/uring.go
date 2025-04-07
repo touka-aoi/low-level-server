@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/touka-aoi/low-level-server/interface/components"
 	"github.com/touka-aoi/low-level-server/internal/event"
 
 	"golang.org/x/sys/unix"
@@ -246,7 +245,7 @@ func (u *Uring) pushSQE(op *UringSQE) error {
 	head, tail := atomic.LoadUint32(u.SQ.Head), atomic.LoadUint32(u.SQ.Tail)
 	if tail-head >= *u.SQ.Entries {
 		slog.Warn("sq entries full", "tail", tail, "head", head)
-		return components.ErrWouldBlock
+		return nil
 	}
 
 	for {

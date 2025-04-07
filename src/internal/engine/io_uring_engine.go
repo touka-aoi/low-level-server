@@ -4,10 +4,10 @@ package engine
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/touka-aoi/low-level-server/internal/event"
 	"github.com/touka-aoi/low-level-server/internal/io"
-	"golang.org/x/exp/slog"
 )
 
 type userData struct {
@@ -44,10 +44,6 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		slog.WarnContext(ctx, "UserData is nil")
 		return nil, nil
 	}
-
-	userData := e.decodeUserData(cqEvent.UserData)
-
-	netEvents := make([]*NetEvent, 0)
 
 	return nil, nil
 }
