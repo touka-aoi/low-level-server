@@ -39,13 +39,13 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd             int32
-	SQ             SQ
-	CQ             CQ
-	Buffer         []byte
-	PBufRing       []byte
-	pBufRingMemory []byte // 使用しない GC対策
-	ProvideBuffer  []byte
+	Fd            int32
+	SQ            SQ
+	CQ            CQ
+	Buffer        []byte
+	PBufRing      []uringBufRing
+	pBufMemory    []byte // 使用しない GC対策
+	ProvideBuffer []byte
 }
 
 type SQ struct {
@@ -145,16 +145,18 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
-func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
+func (u *Uring) RegisterRingBuffer(entries, MaxBufferSiz, bufferGroupID int) {
 	pageSize := unix.Getpagesize()
-	size := entries * int(unsafe.Sizeof(uringBufReg{}))
+	size := entries * int(unsafe.Sizeof(uringBufRing{}))
 	p := make([]byte, size+pageSize-1)
 	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
 	ptr = ((ptr + uintptr(pageSize) - 1) & ^(uintptr(pageSize - 1)))
-	s := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size)
-
+	s := unsafe.Slice((*uringBufRing)(unsafe.Pointer(ptr)), size)
 	u.PBufRing = s
-	u.pBufRingMemory = p
+	u.pBufMemory = p
+
+	buffer := make([]byte, entries*MaxBufferSize)
+	u.ProvideBuffer = buffer
 
 	reg := &uringBufReg{
 		RingAddr:    uint64(ptr),
@@ -176,20 +178,22 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 		panic(errno)
 	}
 
-	uringBufRing := make([]byte, entries*MaxBufferSize)
-	for i := 0; i < entries; i++ {
-		b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[i*int(unsafe.Sizeof(uringBuf{}))]))
-		b.Addr = uint64(uintptr(unsafe.Pointer(&uringBufRing[i*int(MaxBufferSize)])))
+	s[0].Resv = 0 // tail = 0
+	for i := 1; i < entries; i++ {
+		b := s[i]
+		b.Addr = uint64(uintptr(unsafe.Pointer(&buffer[i*int(MaxBufferSize)])))
 		b.Bid = uint16(i)
 		b.Len = uint32(MaxBufferSize)
 	}
-	u.ProvideBuffer = uringBufRing
 
-	//TODO ここにメモリバリアを設置したい
-	b := (*uringBuf)(unsafe.Pointer(&u.PBufRing[0]))
-	b.Resv = uint16(entries)
-
+	u.advancePbufRing(uint16(entries))
 	slog.Info("io-uring register provide buffer success")
+}
+
+func (u *Uring) advancePbufRing(count uint16) {
+	b := (*uringBufRing)(unsafe.Pointer(&u.PBufRing[0]))
+	tail := b.Resv + count
+	b.Resv = tail //TODO: atomic.store
 }
 
 func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
@@ -356,6 +360,33 @@ func (u *Uring) Close() error {
 	return nil
 }
 
+// sendCQEはadvanceCQEとセットで使用する。スレッドセーフではないので注意
+// CQEを取得する (headは進めない)
+func (u *Uring) seenCQE() *UringCQE {
+	head, tail := atomic.LoadUint32(u.CQ.Head), atomic.LoadUint32(u.CQ.Tail)
+
+	if head == tail {
+		slog.Debug("No completion events found, but io_uring_enter did not block")
+		return nil
+	}
+
+	cqes := unsafe.Slice((*UringCQE)(unsafe.Pointer(u.CQ.CQEs)), *u.CQ.Entries)
+	cqe := cqes[head&*u.CQ.Mask]
+
+	return &cqe
+}
+
+// CQEを進める
+func (u *Uring) advanceCQE() {
+	for {
+		head := atomic.LoadUint32(u.CQ.Head)
+		if atomic.CompareAndSwapUint32(u.CQ.Head, head, head+1) {
+			break
+		}
+		runtime.Gosched()
+	}
+}
+
 type uringParams struct {
 	SqEntry      uint32 // エントリの数
 	CqEntry      uint32 // エントリの数
@@ -402,11 +433,12 @@ type uringBufReg struct {
 }
 
 // 16バイト
-type uringBuf struct {
-	Addr uint64
-	Len  uint32
-	Bid  uint16
-	Resv uint16
+// io_uring_bufでもあり、io_uring_buf_ringでもある
+type uringBufRing struct {
+	Addr uint64 // resv1
+	Len  uint32 // resv2
+	Bid  uint16 // recv3
+	Resv uint16 // tail
 }
 
 const (

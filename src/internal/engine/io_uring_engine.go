@@ -32,6 +32,7 @@ func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
 }
 
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
+	// seen cqe
 	cqEvent, err := e.uring.PeekBatchEvents(1)
 	if err != nil {
 		return nil, err
@@ -43,6 +44,8 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		}
 
 	}
+
+	// advance cqe
 
 	return nil, nil
 }
