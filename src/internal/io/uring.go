@@ -42,8 +42,6 @@ type Uring struct {
 	Fd             int32
 	SQ             SQ
 	CQ             CQ
-	sockAddr       sockAddr
-	sockLen        uint32
 	Buffer         []byte
 	PBufRing       []byte
 	pBufRingMemory []byte // 使用しない GC対策
@@ -164,7 +162,7 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 		Bgid:        uint16(bufferGroupID),
 	}
 
-	res, _, errno := unix.Syscall6(
+	_, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_REGISTER,
 		uintptr(u.Fd),
 		IORING_REGISTER_PBUF_RING,
@@ -173,7 +171,7 @@ func (u *Uring) RegisterRingBuffer(entries, bufferGroupID int) {
 		0,
 		0)
 
-	if res < 0 {
+	if errno != 0 {
 		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
@@ -260,7 +258,7 @@ func (u *Uring) pushSQE(op *UringSQE) error {
 }
 
 func (u *Uring) sendSQE() {
-	res, _, errno := unix.Syscall6(
+	_, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
 		1,
@@ -269,14 +267,14 @@ func (u *Uring) sendSQE() {
 		0,
 		0)
 
-	if res < 0 || errno != 0 {
+	if errno != 0 {
 		slog.Error("Uring failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 }
 
 func (u *Uring) WaitEvent() (*UringCQE, error) {
-	res, _, errno := unix.Syscall6(
+	_, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
 		0,
@@ -285,7 +283,7 @@ func (u *Uring) WaitEvent() (*UringCQE, error) {
 		0,
 		0)
 
-	if res < 0 || errno != 0 {
+	if errno != 0 {
 		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error())
 		return nil, errno
 	}
