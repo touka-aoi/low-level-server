@@ -31,23 +31,57 @@ func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
 	return nil
 }
 
+// ReceiveData関数は一つのCQEイベントを処理して、イベントとして返します
+// ここでIO_URINGの依存関係を打ち切ります
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
-	// seen cqe
-	cqEvent, err := e.uring.PeekBatchEvents(1)
+	// 一度の呼びだしで溜まっているCQEイベントを全て消費します (1ループ60fpsで処理できるイベントの数は考え中です)
+	cqeEvents, err := e.uring.PeekBatchEvents(1)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, event := range cqEvent {
-		if event.Res < 0 {
-
-		}
-
+	if len(cqeEvents) == 0 {
+		return nil, nil // ここwouldBlockの方がいいか？ そんなことないか
 	}
 
-	// advance cqe
+	netEvents := make([]*NetEvent, 0, len(cqeEvents))
 
-	return nil, nil
+	for _, cqeEvent := range cqeEvents {
+		if cqeEvent.Res < 0 {
+			// ここではCQEエラーを処理します
+			// Acceptの場合とかReadの場合などmultishotをうまく処理しないといけません
+		}
+
+		userData := e.decodeUserData(cqeEvent.UserData)
+
+		switch userData.eventType {
+		case event.EVENT_TYPE_ACCEPT:
+			netEvents = append(netEvents, &NetEvent{
+				EventType: event.EVENT_TYPE_ACCEPT,
+				Fd:        userData.fd,
+				Data:      nil, // AcceptイベントではDataは使用しない
+			})
+		case event.EVENT_TYPE_READ:
+			if cqeEvent.Res == 0 {
+				// end of file ?
+			}
+			data := make([]byte, cqeEvent.Res) // cqeEvent.Resは受信したバイト
+			// Readイベントの場合はDataに受信したデータを格納します
+			e.uring.Read(data)
+			netEvents = append(netEvents, &NetEvent{
+				EventType: event.EVENT_TYPE_READ,
+				Fd:        userData.fd,
+				Data:      data,
+			})
+		case event.EVENT_TYPE_WRITE:
+			// writeイベントはCQEを発行しない
+		default:
+			// 他のイベントタイプはここで処理する必要があります
+			// なんかエラーを出したいなぁという気分ではあります。
+			return nil, nil
+		}
+	}
+	return netEvents, nil
 }
 
 func (e *UringNetEngine) handleEvent() error {
