@@ -5,7 +5,7 @@ package engine
 import (
 	"net/netip"
 
-	"github.com/touka-aoi/low-level-server/internal/io"
+	"github.com/touka-aoi/low-level-server/core/io"
 )
 
 type Listener interface {

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	toukaerrors "github.com/touka-aoi/low-level-server/internal/errors"
+	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -206,6 +206,15 @@ func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
 	return op
 }
 
+func (u *Uring) ReadMultishot(fd int32, userData uint64) *UringSQE {
+	op := &UringSQE{
+		Opcode:   IORING_OP_READ_MULTISHOT,
+		Fd:       fd,
+		UserData: userData,
+	}
+	return op
+}
+
 func (u *Uring) Submit(op *UringSQE) {
 	_ = u.pushSQE(op)
 	u.sendSQE()
@@ -306,7 +315,7 @@ func (u *Uring) PeekBatchEvents(batch uint32) ([]*UringCQE, error) {
 		batch = ready
 	}
 
-	cqes := make([]*UringCQE, batch)
+	cqes := make([]*UringCQE, 0, batch)
 	for i := uint32(0); i < ready; i++ {
 		cqe := u.getCQE()
 		if cqe == nil {
