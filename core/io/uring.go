@@ -39,13 +39,14 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd             int32
-	SQ             SQ
-	CQ             CQ
-	Buffer         []byte
-	pRingRegBuffer []byte     // 使用しない GC対策
-	pRingBuffer    []uringBuf // mmapしたバッファのポインタ
-	pRingData      []byte     // mmapしたデータのポインタ
+	Fd                 int32
+	SQ                 SQ
+	CQ                 CQ
+	Buffer             []byte
+	pRingRegBuffer     []byte     // 使用しない GC対策
+	pRingBuffer        []uringBuf // mmapしたバッファのポインタ
+	pRingData          []byte     // mmapしたデータのポインタ
+	pRingBufferBasePtr uintptr    // バッファのベースアドレス
 }
 
 type SQ struct {
@@ -185,8 +186,14 @@ func (u *Uring) RegisterRingBuffer(entries, maxBufferSize, bufferGroupID int) {
 
 	u.pRingData = data
 	u.pRingBuffer = pRingBuffer
+	u.pRingBufferBasePtr = bufferBasePtr
 	slog.Debug("Registered ring buffer", "entries", entries, "maxBufferSize", maxBufferSize, "bufferGroupID", bufferGroupID)
 	u.advancePbufRing(uint16(entries))
+}
+
+func (u *Uring) GetRingBuffer(index uint16) []byte {
+	ptr := u.pRingBufferBasePtr + uintptr(index)*MaxBufferSize
+	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), MaxBufferSize)
 }
 
 func (u *Uring) advancePbufRing(count uint16) {
@@ -578,4 +585,8 @@ const (
 const (
 	IOU_PBUF_RING_MMAP = 1 << iota
 	IOU_PBUF_RING_INC
+)
+
+const (
+	IORING_CQE_BUFFER_SHIFT = 16
 )

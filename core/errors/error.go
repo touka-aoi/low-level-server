@@ -1,4 +1,4 @@
-package toukaerrors
+package terrr
 
 import "errors"
 

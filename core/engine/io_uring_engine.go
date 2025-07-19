@@ -69,6 +69,24 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				Data:      nil,
 			})
 		case event.EVENT_TYPE_READ:
+			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+				// 再度Readイベントを起こす
+				// 再度必要用のイベントで返せばいいか？？？考え中...
+			}
+			if cqeEvent.Res == -ENOBUFS {
+				// これってどういう状況？
+				slog.WarnContext(ctx, "No buffer available for read", "fd", userData.fd)
+				return nil, nil
+			}
+
+			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER == 0 {
+				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
+				return nil, nil
+			}
+			idx := cqeEvent.Flags >> io.IORING_CQE_BUFFER_SHIFT
+			buff := e.uring.GetRingBuffer(uint16(idx))
+			slog.DebugContext(ctx, "Read buffer", "fd", userData.fd, "bufferIndex", idx, "dataLength", len(buff), "data", string(buff))
+
 			slog.DebugContext(ctx, "Read event", "fd", userData.fd, "bytesRead", cqeEvent.Res, "flags", cqeEvent.Flags)
 			netEvents = append(netEvents, &NetEvent{
 				EventType: event.EVENT_TYPE_READ,
@@ -84,10 +102,6 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		}
 	}
 	return netEvents, nil
-}
-
-func (e *UringNetEngine) handleEvent() error {
-	return nil
 }
 
 func (e *UringNetEngine) PrepareClose() error {
