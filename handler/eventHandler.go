@@ -28,22 +28,28 @@ func NewSessionManager(netEngine engine.NetEngine) *SessionManager {
 func (sm *SessionManager) Serve(ctx context.Context) {
 	// ちょっとwaitする必要があるなぁとおもいつつ、、、
 	for {
-		netEvents, err := sm.engine.ReceiveData(ctx)
-		if err != nil {
-			// エラー処理
-			continue
-		}
+		select {
+		case <-ctx.Done():
+			slog.InfoContext(ctx, "Session manager shutting down")
+			return
+		default:
+			netEvents, err := sm.engine.ReceiveData(ctx)
+			if err != nil {
+				// エラー処理
+				continue
+			}
 
-		for NetEvent := range slices.Values(netEvents) {
-			switch NetEvent.EventType {
-			case event.EVENT_TYPE_ACCEPT:
-				sm.handleAccept(ctx, NetEvent)
-			// case event.EVENT_TYPE_READ:
-			// 	sm.handleRead(NetEvent)
-			// case event.EVENT_TYPE_WRITE:
-			// 	sm.handleWrite(NetEvent)
-			default:
-				// 未知のイベントタイプの処理
+			for NetEvent := range slices.Values(netEvents) {
+				switch NetEvent.EventType {
+				case event.EVENT_TYPE_ACCEPT:
+					sm.handleAccept(ctx, NetEvent)
+				// case event.EVENT_TYPE_READ:
+				// 	sm.handleRead(NetEvent)
+				// case event.EVENT_TYPE_WRITE:
+				// 	sm.handleWrite(NetEvent)
+				default:
+					// 未知のイベントタイプの処理
+				}
 			}
 		}
 	}
