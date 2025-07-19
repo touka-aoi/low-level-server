@@ -175,11 +175,12 @@ func (u *Uring) RegisterRingBuffer(entries, maxBufferSize, bufferGroupID int) {
 		slog.Error("IO_URING_REGISTER failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
+
 	for i := 0; i < entries; i++ {
-		buf := pRingBuffer[(int(pRingBuffer[0].Resv)+i)%(entries-1)]
-		buf.Addr = uint64(bufferBasePtr + uintptr(i)*MaxBufferSize)
-		buf.Len = uint32(maxBufferSize)
-		buf.Bid = uint16(i)
+		index := (int(pRingBuffer[0].Resv) + i) & (entries - 1)
+		pRingBuffer[index].Addr = uint64(bufferBasePtr + uintptr(i)*MaxBufferSize)
+		pRingBuffer[index].Len = uint32(maxBufferSize)
+		pRingBuffer[index].Bid = uint16(i)
 	}
 
 	u.pRingData = data
