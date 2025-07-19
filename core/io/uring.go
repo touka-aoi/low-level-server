@@ -43,9 +43,9 @@ type Uring struct {
 	SQ             SQ
 	CQ             CQ
 	Buffer         []byte
-	pBufTail       *uringBufTail // tail管理用のポインタ
-	pRingRegBuffer []byte        // 使用しない GC対策
-	pRingBuffer    []byte
+	pRingRegBuffer []byte     // 使用しない GC対策
+	pRingBuffer    []uringBuf // mmapしたバッファのポインタ
+	pRingData      []byte     // mmapしたデータのポインタ
 }
 
 type SQ struct {
@@ -146,14 +146,18 @@ func CreateUring(entries uint32) *Uring {
 }
 
 func (u *Uring) RegisterRingBuffer(entries, maxBufferSize, bufferGroupID int) {
-	ringSize := int(unsafe.Sizeof(uringBufTail{})) + entries*int(unsafe.Sizeof(uringBuf{}))
-	pageSize := unix.Getpagesize()
-	ringRegBuffer := make([]byte, ringSize+pageSize-1)
-	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(ringRegBuffer)))
-	alignedPtr := (ptr + uintptr(pageSize) - 1) & ^(uintptr(pageSize - 1))
+	ringSize := (unsafe.Sizeof(uringBuf{}) + MaxBufferSize) * uintptr(entries)
+	data, err := unix.Mmap(-1, 0, int(ringSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANONYMOUS|unix.MAP_PRIVATE)
+	if err != nil {
+		slog.Error("Mmap failed for ring buffer", "err", err, "errno", err.Error())
+		panic(err)
+	}
+	pRingPtr := unsafe.Pointer(unsafe.SliceData(data))
+	pRingBuffer := unsafe.Slice((*uringBuf)(pRingPtr), entries)
+	bufferBasePtr := uintptr(pRingPtr) + (uintptr(entries) * unsafe.Sizeof(uringBuf{}))
 
 	reg := &uringBufReg{
-		RingAddr:    uint64(alignedPtr),
+		RingAddr:    uint64(uintptr(pRingPtr)),
 		RingEntries: uint32(entries),
 		Bgid:        uint16(bufferGroupID),
 	}
@@ -167,44 +171,29 @@ func (u *Uring) RegisterRingBuffer(entries, maxBufferSize, bufferGroupID int) {
 		0,
 		0,
 	)
-
 	if errno != 0 {
-		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
+		slog.Error("IO_URING_REGISTER failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
-
-	bufTail := (*uringBufTail)(unsafe.Pointer(alignedPtr))
-	slog.Debug("uringBufTail", "resv1", bufTail.Resv1, "resv2", bufTail.Resv2, "resv3", bufTail.Resv3, "tail", bufTail.Tail)
-
-	ringBuffer := make([]byte, entries*maxBufferSize)
-	bufPtr := unsafe.Pointer(alignedPtr + unsafe.Sizeof(uringBufTail{}))
-	bufs := unsafe.Slice((*uringBuf)(bufPtr), entries)
 	for i := 0; i < entries; i++ {
-		bufs[i].Addr = uint64(uintptr(unsafe.Pointer(&ringBuffer[i*maxBufferSize])))
-		bufs[i].Len = uint32(maxBufferSize)
-		bufs[i].Bid = uint16(i)
-		bufs[i].Resv = 0
+		buf := pRingBuffer[(int(pRingBuffer[0].Resv)+i)%(entries-1)]
+		buf.Addr = uint64(bufferBasePtr + uintptr(i)*MaxBufferSize)
+		buf.Len = uint32(maxBufferSize)
+		buf.Bid = uint16(i)
 	}
 
-	bufTail.Resv1 = uint64(entries) // この予約番号で書き換えないと動かない
-	bufTail.Tail = 0
-
-	u.pBufTail = bufTail
-	u.pRingRegBuffer = ringRegBuffer
-	u.pRingBuffer = ringBuffer
-
-	slog.Info("io-uring register provide buffer success", "entries", entries, "maxBufferSize", maxBufferSize, "bufferGroupID", bufferGroupID)
+	u.pRingData = data
+	u.pRingBuffer = pRingBuffer
+	slog.Debug("Registered ring buffer", "entries", entries, "maxBufferSize", maxBufferSize, "bufferGroupID", bufferGroupID)
 	u.advancePbufRing(uint16(entries))
 }
 
 func (u *Uring) advancePbufRing(count uint16) {
-	currentTail := u.pBufTail.Tail
-	newTail := currentTail + count
-	u.pBufTail.Tail = newTail
-	slog.Debug("Advanced buffer ring tail", "oldTail", currentTail, "newTail", newTail, "count", count)
+	newTail := u.pRingBuffer[0].Resv + count
+	u.pRingBuffer[0].Resv = newTail
 }
 
-func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
+func (u *Uring) AcceptMultishot(fd int32, userData uint64) *UringSQE {
 	op := &UringSQE{
 		Opcode:   IORING_OP_ACCEPT,
 		Ioprio:   IORING_ACCEPT_MULTISHOT, // https://lore.kernel.org/lkml/a41a1f47-ad05-3245-8ac8-7d8e95ebde44@kernel.dk/t/
@@ -216,12 +205,14 @@ func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
 
 func (u *Uring) ReadMultishot(fd int32, userData uint64) *UringSQE {
 	op := &UringSQE{
-		Opcode:   IORING_OP_READ_MULTISHOT,
+		// Opcode:   IORING_OP_READ_MULTISHOT,
+		Opcode:   IORING_OP_READ, // 一旦通常のREADで試す
 		Flags:    IOSQE_BUFFER_SELECT,
 		BufIndex: 1,
 		Fd:       fd,
 		UserData: userData,
 	}
+	slog.Debug("ReadMultishot", "opcode", op.Opcode, "flags", op.Flags, "bufIndex", op.BufIndex)
 	return op
 }
 
@@ -368,7 +359,7 @@ func (u *Uring) getCQE() *UringCQE {
 }
 
 func (u *Uring) Read(buffer []byte) {
-	copy(buffer, u.pRingBuffer[:len(buffer)])
+	// copy(buffer, u.pRingBuffer[:len(buffer)])
 }
 
 func (u *Uring) Close() error {

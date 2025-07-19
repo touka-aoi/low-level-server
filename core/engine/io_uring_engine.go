@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -24,14 +25,14 @@ type UringNetEngine struct {
 
 func NewUringNetEngine() *UringNetEngine {
 	uring := io.CreateUring(4096)
-	uring.RegisterRingBuffer(256, io.MaxBufferSize, 1)
+	uring.RegisterRingBuffer(256, io.MaxBufferSize, 0)
 	return &UringNetEngine{
 		uring: uring,
 	}
 }
 
 func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
-	op := e.uring.AccpetMultishot(listener.Fd(), e.encodeUserData(event.EVENT_TYPE_ACCEPT, listener.Fd()))
+	op := e.uring.AcceptMultishot(listener.Fd(), e.encodeUserData(event.EVENT_TYPE_ACCEPT, listener.Fd()))
 	e.uring.Submit(op)
 	return nil
 }
@@ -41,7 +42,7 @@ func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	// 一度の呼びだしで溜まっているCQEイベントを全て消費します (1ループ60fpsで処理できるイベントの数は考え中です)
 	// ここはチャンネルとかの方がいいのか？
-	cqeEvents, err := e.uring.PeekBatchEvents(1)
+	cqeEvents, err := e.uring.PeekBatchEvents(64)
 	if err != nil {
 		return nil, err
 	}
@@ -73,14 +74,36 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				Data:      nil,
 			})
 		case event.EVENT_TYPE_READ:
-			slog.DebugContext(ctx, "Read event", "fd", userData.fd, "bytesRead", cqeEvent.Res)
-			if cqeEvent.Res == 0 {
-				// end of file ?
+			slog.DebugContext(ctx, "Read event", "fd", userData.fd, "bytesRead", cqeEvent.Res, "flags", cqeEvent.Flags)
+
+			// Buffer IDを確認
+			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER != 0 {
+				bufferID := cqeEvent.Flags >> 16
+				slog.DebugContext(ctx, "Buffer selected", "bufferID", bufferID, "flags", fmt.Sprintf("0x%x", cqeEvent.Flags))
 			}
-			//TODO: makeしてるのはよくないのでリングバッファにしたい
-			data := make([]byte, 0, cqeEvent.Res) // cqeEvent.Resは受信したバイト
-			// Readイベントの場合はDataに受信したデータを格納します
-			e.uring.Read(data)
+			if cqeEvent.Res == 0 {
+				if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+					slog.DebugContext(ctx, "Read event with more flag", "fd", userData.fd)
+					// マルチショットが終わってそう
+				}
+				continue
+			}
+
+			// Buffer IDを取得
+			var data []byte
+			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER != 0 {
+				// buffer IDは上位16ビットに格納されている
+				bufferID := cqeEvent.Flags >> 16
+				slog.DebugContext(ctx, "Buffer selected", "bufferID", bufferID)
+
+				// buffer IDとサイズからデータを取得
+				// data = e.uring.ReadFromBuffer(uint16(bufferID), int(cqeEvent.Res))
+			} else {
+				// バッファが選択されていない（エラー？）
+				slog.WarnContext(ctx, "No buffer selected for read event")
+				data = make([]byte, 0)
+			}
+
 			netEvents = append(netEvents, &NetEvent{
 				EventType: event.EVENT_TYPE_READ,
 				Fd:        userData.fd,
