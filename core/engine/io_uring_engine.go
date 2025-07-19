@@ -24,6 +24,7 @@ type UringNetEngine struct {
 
 func NewUringNetEngine() *UringNetEngine {
 	uring := io.CreateUring(4096)
+	uring.RegisterRingBuffer(256, io.MaxBufferSize, 1)
 	return &UringNetEngine{
 		uring: uring,
 	}
@@ -52,23 +53,27 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	netEvents := make([]*NetEvent, 0, len(cqeEvents))
 
 	for cqeEvent := range slices.Values(cqeEvents) {
+		userData := e.decodeUserData(cqeEvent.UserData)
 		if cqeEvent.Res < 0 {
 			// ここではCQEエラーを処理します
 			// Acceptの場合とかReadの場合などmultishotをうまく処理しないといけません
-			slog.ErrorContext(ctx, "Error in CQE event", "error", cqeEvent.Res)
+			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
 			panic("CQE event error") // ここはpanicしない方がいいかもしれません
 		}
 
-		userData := e.decodeUserData(cqeEvent.UserData)
-
 		switch userData.eventType {
 		case event.EVENT_TYPE_ACCEPT:
+			if cqeEvent.Flags&io.IORING_CQE_F_MORE != 0 {
+				slog.DebugContext(ctx, "Accept event with more flag", "fd", userData.fd)
+			}
+
 			netEvents = append(netEvents, &NetEvent{
 				EventType: event.EVENT_TYPE_ACCEPT,
 				Fd:        cqeEvent.Res,
 				Data:      nil,
 			})
 		case event.EVENT_TYPE_READ:
+			slog.DebugContext(ctx, "Read event", "fd", userData.fd, "bytesRead", cqeEvent.Res)
 			if cqeEvent.Res == 0 {
 				// end of file ?
 			}
@@ -103,6 +108,7 @@ func (e *UringNetEngine) PrepareClose() error {
 func (e *UringNetEngine) RegisterRead(ctx context.Context, peer *Peer) error {
 	userData := e.encodeUserData(event.EVENT_TYPE_READ, peer.Fd)
 	op := e.uring.ReadMultishot(peer.Fd, userData)
+	slog.DebugContext(ctx, "Registering read operation", "fd", peer.Fd, "userData", userData)
 	e.uring.Submit(op)
 	return nil
 }

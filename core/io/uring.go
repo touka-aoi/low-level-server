@@ -39,13 +39,13 @@ type UringCQE struct {
 }
 
 type Uring struct {
-	Fd            int32
-	SQ            SQ
-	CQ            CQ
-	Buffer        []byte
-	PBufRing      []uringBufRing
-	pBufMemory    []byte // 使用しない GC対策
-	ProvideBuffer []byte
+	Fd             int32
+	SQ             SQ
+	CQ             CQ
+	Buffer         []byte
+	pBufTail       *uringBufTail // tail管理用のポインタ
+	pRingRegBuffer []byte        // 使用しない GC対策
+	pRingBuffer    []byte
 }
 
 type SQ struct {
@@ -145,21 +145,15 @@ func CreateUring(entries uint32) *Uring {
 
 }
 
-func (u *Uring) RegisterRingBuffer(entries, MaxBufferSiz, bufferGroupID int) {
+func (u *Uring) RegisterRingBuffer(entries, maxBufferSize, bufferGroupID int) {
+	ringSize := int(unsafe.Sizeof(uringBufTail{})) + entries*int(unsafe.Sizeof(uringBuf{}))
 	pageSize := unix.Getpagesize()
-	size := entries * int(unsafe.Sizeof(uringBufRing{}))
-	p := make([]byte, size+pageSize-1)
-	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
-	ptr = ((ptr + uintptr(pageSize) - 1) & ^(uintptr(pageSize - 1)))
-	s := unsafe.Slice((*uringBufRing)(unsafe.Pointer(ptr)), size)
-	u.PBufRing = s
-	u.pBufMemory = p
-
-	buffer := make([]byte, entries*MaxBufferSize)
-	u.ProvideBuffer = buffer
+	ringRegBuffer := make([]byte, ringSize+pageSize-1)
+	ptr := uintptr(unsafe.Pointer(unsafe.SliceData(ringRegBuffer)))
+	alignedPtr := (ptr + uintptr(pageSize) - 1) & ^(uintptr(pageSize - 1))
 
 	reg := &uringBufReg{
-		RingAddr:    uint64(ptr),
+		RingAddr:    uint64(alignedPtr),
 		RingEntries: uint32(entries),
 		Bgid:        uint16(bufferGroupID),
 	}
@@ -171,29 +165,43 @@ func (u *Uring) RegisterRingBuffer(entries, MaxBufferSiz, bufferGroupID int) {
 		uintptr(unsafe.Pointer(reg)),
 		1,
 		0,
-		0)
+		0,
+	)
 
 	if errno != 0 {
 		slog.Error("io_uring_register failed", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 
-	s[0].Resv = 0 // tail = 0
-	for i := 1; i < entries; i++ {
-		b := s[i]
-		b.Addr = uint64(uintptr(unsafe.Pointer(&buffer[i*int(MaxBufferSize)])))
-		b.Bid = uint16(i)
-		b.Len = uint32(MaxBufferSize)
+	bufTail := (*uringBufTail)(unsafe.Pointer(alignedPtr))
+	slog.Debug("uringBufTail", "resv1", bufTail.Resv1, "resv2", bufTail.Resv2, "resv3", bufTail.Resv3, "tail", bufTail.Tail)
+
+	ringBuffer := make([]byte, entries*maxBufferSize)
+	bufPtr := unsafe.Pointer(alignedPtr + unsafe.Sizeof(uringBufTail{}))
+	bufs := unsafe.Slice((*uringBuf)(bufPtr), entries)
+	for i := 0; i < entries; i++ {
+		bufs[i].Addr = uint64(uintptr(unsafe.Pointer(&ringBuffer[i*maxBufferSize])))
+		bufs[i].Len = uint32(maxBufferSize)
+		bufs[i].Bid = uint16(i)
+		bufs[i].Resv = 0
 	}
 
+	bufTail.Resv1 = uint64(entries) // この予約番号で書き換えないと動かない
+	bufTail.Tail = 0
+
+	u.pBufTail = bufTail
+	u.pRingRegBuffer = ringRegBuffer
+	u.pRingBuffer = ringBuffer
+
+	slog.Info("io-uring register provide buffer success", "entries", entries, "maxBufferSize", maxBufferSize, "bufferGroupID", bufferGroupID)
 	u.advancePbufRing(uint16(entries))
-	slog.Info("io-uring register provide buffer success")
 }
 
 func (u *Uring) advancePbufRing(count uint16) {
-	b := (*uringBufRing)(unsafe.Pointer(&u.PBufRing[0]))
-	tail := b.Resv + count
-	b.Resv = tail //TODO: atomic.store
+	currentTail := u.pBufTail.Tail
+	newTail := currentTail + count
+	u.pBufTail.Tail = newTail
+	slog.Debug("Advanced buffer ring tail", "oldTail", currentTail, "newTail", newTail, "count", count)
 }
 
 func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
@@ -209,6 +217,8 @@ func (u *Uring) AccpetMultishot(fd int32, userData uint64) *UringSQE {
 func (u *Uring) ReadMultishot(fd int32, userData uint64) *UringSQE {
 	op := &UringSQE{
 		Opcode:   IORING_OP_READ_MULTISHOT,
+		Flags:    IOSQE_BUFFER_SELECT,
+		BufIndex: 1,
 		Fd:       fd,
 		UserData: userData,
 	}
@@ -358,7 +368,7 @@ func (u *Uring) getCQE() *UringCQE {
 }
 
 func (u *Uring) Read(buffer []byte) {
-	copy(buffer, u.ProvideBuffer[:len(buffer)])
+	copy(buffer, u.pRingBuffer[:len(buffer)])
 }
 
 func (u *Uring) Close() error {
@@ -437,23 +447,31 @@ type uringBufReg struct {
 	RingAddr    uint64
 	RingEntries uint32
 	Bgid        uint16
-	Pad         uint16
+	Flags       uint16
 	Resv        [3]uint64
 }
 
 // 16バイト
-// io_uring_bufでもあり、io_uring_buf_ringでもある
-type uringBufRing struct {
-	Addr uint64 // resv1
-	Len  uint32 // resv2
-	Bid  uint16 // recv3
-	Resv uint16 // tail
+type uringBuf struct {
+	Addr uint64
+	Len  uint32
+	Bid  uint16
+	Resv uint16
+}
+
+type uringBufTail struct {
+	Resv1 uint64
+	Resv2 uint32
+	Resv3 uint16
+	Tail  uint16
 }
 
 const (
-	IORING_OFF_SQ_RING int64 = 0
-	ORING_OFF_CQ_RING  int64 = 0x8000000
-	IORING_OFF_SQES    int64 = 0x10000000
+	IORING_OFF_SQ_RING    int64 = 0
+	ORING_OFF_CQ_RING     int64 = 0x8000000
+	IORING_OFF_SQES       int64 = 0x10000000
+	IORING_OFF_PBUF_RING  int64 = 0x80000000
+	IORING_OFF_PBUF_SHIFT int64 = 16
 )
 
 // IO_URING_ENTER flags
@@ -563,4 +581,9 @@ const (
 // https://github.com/axboe/liburing/blob/c5eead2659ef5ea86ef8c78410fa42d9bea976c9/src/include/liburing/io_uring.h#L565
 const (
 	IORING_REGISTER_PBUF_RING = 22
+)
+
+const (
+	IOU_PBUF_RING_MMAP = 1 << iota
+	IOU_PBUF_RING_INC
 )
