@@ -85,13 +85,16 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 			}
 			idx := cqeEvent.Flags >> io.IORING_CQE_BUFFER_SHIFT
 			buff := e.uring.GetRingBuffer(uint16(idx))
-			slog.DebugContext(ctx, "Read buffer", "fd", userData.fd, "bufferIndex", idx, "dataLength", len(buff), "data", string(buff))
-
+			// recvの場合ここからvalidationが必要
+			slog.DebugContext(ctx, "Read buffer", "fd", userData.fd, "bufferIndex", idx, "dataLength", len(buff))
+			// engineが持っているバッファ領域にコピーしてあげたいが今回は新しく作っておく
+			b := make([]byte, cqeEvent.Res)
+			copy(b, buff[:cqeEvent.Res])
 			slog.DebugContext(ctx, "Read event", "fd", userData.fd, "bytesRead", cqeEvent.Res, "flags", cqeEvent.Flags)
 			netEvents = append(netEvents, &NetEvent{
 				EventType: event.EVENT_TYPE_READ,
 				Fd:        userData.fd,
-				Data:      nil,
+				Data:      b,
 			})
 		case event.EVENT_TYPE_WRITE:
 			// writeイベントはCQEを発行しない
@@ -172,4 +175,11 @@ func (e *UringNetEngine) GetPeerName(ctx context.Context, fd int32) (*Peer, erro
 		LocalAddr:  localAddrPort,
 		RemoteAddr: remoteAddrPort,
 	}, nil
+}
+
+func (e *UringNetEngine) Write(ctx context.Context, fd int32, data []byte) error {
+	userData := e.encodeUserData(event.EVENT_TYPE_WRITE, fd)
+	e.uring.Write(fd, data, userData)
+	slog.DebugContext(ctx, "Submitted write operation", "fd", fd, "dataLength", len(data))
+	return nil
 }

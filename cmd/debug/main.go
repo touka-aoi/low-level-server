@@ -10,8 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/touka-aoi/low-level-server/handler"
 	"github.com/touka-aoi/low-level-server/core/engine"
+	"github.com/touka-aoi/low-level-server/handler"
+	"github.com/touka-aoi/low-level-server/middleware"
 )
 
 func main() {
@@ -52,8 +53,13 @@ func main() {
 		log.Fatalf("Failed to start accepting connections: %v", err)
 	}
 
+	// pipelineの作成
+	pipeline := middleware.NewPipeline().
+		Use(middleware.HTTPParserMiddleware).
+		Use(middleware.HTTPResponseMiddleware)
+
 	// セッションマネージャーの作成
-	sessionManager := handler.NewSessionManager(netEngine)
+	sessionManager := handler.NewSessionManager(netEngine, pipeline)
 
 	// サーバーの開始
 	slog.Info("Server ready to accept connections")
