@@ -28,7 +28,7 @@ func main() {
 	if *debug {
 		logLevel = slog.LevelDebug
 	}
-
+	
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,
 	}))
@@ -77,6 +77,6 @@ func main() {
 
 	// Run the server
 	networkServer.Serve(ctx)
-
+	
 	slog.Info("Server stopped")
 }
