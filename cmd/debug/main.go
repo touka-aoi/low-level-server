@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/touka-aoi/low-level-server/application/http"
 	"github.com/touka-aoi/low-level-server/core/engine"
 	"github.com/touka-aoi/low-level-server/server"
+	"github.com/touka-aoi/low-level-server/transport/http"
 )
 
 func main() {

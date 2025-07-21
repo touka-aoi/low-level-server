@@ -6,14 +6,14 @@ import (
 	"log/slog"
 
 	"github.com/touka-aoi/low-level-server/core/engine"
-	"github.com/touka-aoi/low-level-server/protocol"
+	"github.com/touka-aoi/low-level-server/transport"
 )
 
 type HTTPApplication struct {
 	router *Router
 }
 
-func NewHTTPApplication(router *Router) protocol.Application {
+func NewHTTPApplication(router *Router) transport.Transport {
 	return &HTTPApplication{
 		router: router,
 	}

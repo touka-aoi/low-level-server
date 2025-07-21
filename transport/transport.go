@@ -1,4 +1,4 @@
-package protocol
+package transport
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"github.com/touka-aoi/low-level-server/core/engine"
 )
 
-type Application interface {
+type Transport interface {
 	OnConnect(ctx context.Context, peer *engine.Peer) error
 	OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error)
 	OnDisconnect(ctx context.Context, peer *engine.Peer) error

@@ -8,7 +8,7 @@ import (
 	"github.com/touka-aoi/low-level-server/core/engine"
 	"github.com/touka-aoi/low-level-server/core/event"
 	"github.com/touka-aoi/low-level-server/middleware"
-	"github.com/touka-aoi/low-level-server/protocol"
+	"github.com/touka-aoi/low-level-server/transport"
 )
 
 const (
@@ -19,10 +19,10 @@ type NetworkServer struct {
 	engine      engine.NetEngine
 	connections map[int32]engine.Peer
 	pipeline    *middleware.Pipeline
-	app         protocol.Application
+	app         transport.Transport
 }
 
-func NewNetworkServer(netEngine engine.NetEngine, app protocol.Application, pipeline *middleware.Pipeline) *NetworkServer {
+func NewNetworkServer(netEngine engine.NetEngine, app transport.Transport, pipeline *middleware.Pipeline) *NetworkServer {
 	return &NetworkServer{
 		engine:      netEngine,
 		connections: make(map[int32]engine.Peer),
@@ -135,7 +135,7 @@ func (ns *NetworkServer) handleRead(event *engine.NetEvent) {
 			slog.Error("Application error", "fd", fd, "error", err)
 			return
 		}
-		
+
 		// レスポンスがあれば送信
 		if len(response) > 0 {
 			if err := ns.engine.Write(ctx, fd, response); err != nil {
@@ -144,4 +144,3 @@ func (ns *NetworkServer) handleRead(event *engine.NetEvent) {
 		}
 	}
 }
-
