@@ -38,6 +38,10 @@ func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener
 }
 
 func (l *TCPListener) Close() error {
+	err := l.socket.Close()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
