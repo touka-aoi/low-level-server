@@ -107,12 +107,6 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		case event.EVENT_TYPE_WRITE:
 			// writeイベントはCQEを発行しない
 		case event.EVENT_TYPE_RECVMSG:
-			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
-				// F_MOREの原因はどうやって判定したらいいのか
-				slog.DebugContext(ctx, "No more data to receive", "fd", userData.fd)
-				op := e.uring.RecvFrom(userData.fd, e.encodeUserData(event.EVENT_TYPE_RECVMSG, userData.fd))
-				e.uring.Submit(op)
-			}
 			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER == 0 {
 				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
 				return nil, nil
@@ -121,18 +115,31 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 			buff := e.uring.GetRingBuffer(uint16(idx))
 			b := make([]byte, cqeEvent.Res)
 			copy(b, buff[:cqeEvent.Res])
+
 			addrBytes := unsafe.Slice(e.uring.Msghdr.Name, e.uring.Msghdr.Namelen)
-			slog.DebugContext(ctx, "addres Bytes", "addrBytes", addrBytes, "length", len(addrBytes), "addrByte", e.uring.Addr)
 			family := binary.LittleEndian.Uint16(addrBytes[0:2])
+			var remoteAddr netip.AddrPort
 			if family == unix.AF_INET && len(addrBytes) >= 16 {
 				// IPv4の場合
 				port := binary.BigEndian.Uint16(addrBytes[2:4])
 				ip := net.IPv4(addrBytes[4], addrBytes[5], addrBytes[6], addrBytes[7])
-				remoteAddr := fmt.Sprintf("%s:%d", ip, port)
-				slog.DebugContext(ctx, "remote Addr", "remoteAddr", remoteAddr)
+				addr := fmt.Sprintf("%s:%d", ip, port)
+				remoteAddr = netip.MustParseAddrPort(addr)
 			}
-			slog.DebugContext(ctx, "Received data from peer", "fd", userData.fd, "dataLength", cqeEvent.Res, "msgHdr", e.uring.Msghdr, "data", b)
+			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+				// F_MOREの原因はどうやって判定したらいいのか
+				slog.DebugContext(ctx, "F_MORE flag not set, submitting new recvmsg operation", "fd", userData.fd)
+				op := e.uring.RecvFrom(userData.fd, e.encodeUserData(event.EVENT_TYPE_RECVMSG, userData.fd))
+				e.uring.Submit(op)
+			}
+			netEvents = append(netEvents, &NetEvent{
+				EventType:  event.EVENT_TYPE_RECVMSG,
+				Fd:         userData.fd,
+				Data:       b,
+				RemoteAddr: remoteAddr,
+			})
 		default:
+			slog.WarnContext(ctx, "Unknown event type", "eventType", userData.eventType)
 			// 他のイベントタイプはここで処理する必要があります
 			// なんかエラーを出したいなぁという気分ではあります。
 			return nil, nil

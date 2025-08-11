@@ -226,7 +226,7 @@ func (u *Uring) RecvFrom(fd int32, userData uint64) *UringSQE {
 	}
 	op := &UringSQE{
 		Opcode:   IORING_OP_RECVMSG,
-		Ioprio:   0,
+		Ioprio:   0, //NOTE: MultiShotを使うとMsgHdrがカーネル側で初期化されるので取得できない
 		Flags:    IOSQE_BUFFER_SELECT,
 		BufIndex: 1,
 		Fd:       fd,

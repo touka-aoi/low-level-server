@@ -10,9 +10,10 @@ import (
 )
 
 type NetEvent struct {
-	EventType event.EventType
-	Fd        int32
-	Data      []byte
+	EventType  event.EventType
+	Fd         int32
+	Data       []byte
+	RemoteAddr netip.AddrPort
 }
 
 type Peer struct {
