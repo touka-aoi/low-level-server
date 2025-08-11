@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -17,9 +16,9 @@ import (
 func main() {
 	// Parse flags
 	var (
-		host  = flag.String("host", "0.0.0.0", "Host to listen on")
-		port  = flag.Int("port", 8080, "Port to listen on")
-		debug = flag.Bool("debug", false, "Enable debug logging")
+		address = flag.String("address", "0.0.0.0", "Host to listen on")
+		port    = flag.Int("port", 8080, "Port to listen on")
+		debug   = flag.Bool("debug", false, "Enable debug logging")
 	)
 	flag.Parse()
 
@@ -34,38 +33,29 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// Create io_uring engine
 	netEngine := engine.NewUringNetEngine()
 	defer netEngine.Close()
 
-	// Create HTTP application with default handlers
 	router := http.DefaultHandlers()
 	httpApp := http.NewHTTPApplication(router)
 
-	// Create network server
-	networkServer := server.NewNetworkServer(netEngine, httpApp, nil)
-
-	// Create listener
-	addr := fmt.Sprintf("%s:%d", *host, *port)
-	listener, err := engine.Listen("tcp", addr, 128)
-	if err != nil {
-		slog.Error("Failed to create listener", "error", err)
-		os.Exit(1)
+	config := server.NetworkServerConfig{
+		Protocol: "tcp",
+		Address:  *address,
+		Port:     *port,
 	}
-	defer listener.Close()
 
-	slog.Info("HTTP server starting", "address", addr)
+	networkServer := server.NewNetworkServer(netEngine, config, httpApp, nil)
 
-	// Start accepting connections
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := netEngine.Accept(ctx, listener); err != nil {
-		slog.Error("Failed to start accepting connections", "error", err)
+	err := networkServer.Listen(ctx)
+	if err != nil {
+		slog.Error("Failed networkServer.Listen()", "error", err)
 		os.Exit(1)
 	}
 
-	// Handle shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -75,7 +65,6 @@ func main() {
 		cancel()
 	}()
 
-	// Run the server
 	networkServer.Serve(ctx)
 
 	slog.Info("Server stopped")

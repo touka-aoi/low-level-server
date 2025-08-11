@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -15,16 +16,25 @@ const (
 	maxConnections = 65535
 )
 
+type NetworkServerConfig struct {
+	Protocol string
+	Address  string
+	Port     int
+}
+
 type NetworkServer struct {
 	engine      engine.NetEngine
+	listener    engine.Listener
+	config      NetworkServerConfig
 	connections map[int32]engine.Peer
 	pipeline    *middleware.Pipeline
 	app         transport.Transport
 }
 
-func NewNetworkServer(netEngine engine.NetEngine, app transport.Transport, pipeline *middleware.Pipeline) *NetworkServer {
+func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, app transport.Transport, pipeline *middleware.Pipeline) *NetworkServer {
 	return &NetworkServer{
 		engine:      netEngine,
+		config:      config,
 		connections: make(map[int32]engine.Peer),
 		pipeline:    pipeline,
 		app:         app,
@@ -32,7 +42,6 @@ func NewNetworkServer(netEngine engine.NetEngine, app transport.Transport, pipel
 }
 
 func (ns *NetworkServer) Serve(ctx context.Context) {
-	// ちょっとwaitする必要があるなぁとおもいつつ、、、
 	for {
 		select {
 		case <-ctx.Done():
@@ -59,6 +68,23 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (ns *NetworkServer) Listen(ctx context.Context) error {
+	addr := fmt.Sprintf("%s:%d", ns.config.Address, ns.config.Port)
+	listener, err := engine.Listen(ns.config.Protocol, addr, 1024)
+	if err != nil {
+		return err
+	}
+	ns.listener = listener
+
+	if err := ns.engine.Accept(ctx, listener); err != nil {
+		slog.ErrorContext(ctx, "Failed to start accepting connections", "error", err)
+		return err
+	}
+
+	slog.Info("Listening on", "address", addr)
+	return nil
 }
 
 func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEvent) {
