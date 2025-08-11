@@ -2,11 +2,14 @@
 
 package event
 
+import "fmt"
+
 type EventType int
 
 const (
 	EVENT_TYPE_ACCEPT EventType = iota
 	EVENT_TYPE_READ
+	EVENT_TYPE_RECVMSG
 	EVENT_TYPE_WRITE
 )
 
@@ -18,7 +21,9 @@ func (et EventType) String() string {
 		return "EVENT_TYPE_READ"
 	case EVENT_TYPE_WRITE:
 		return "EVENT_TYPE_WRITE"
+	case EVENT_TYPE_RECVMSG:
+		return "EVENT_TYPE_RECVMSG"
 	default:
-		return "UNKNOWN"
+		return fmt.Sprintf("UNKNOWN: %d", et)
 	}
 }

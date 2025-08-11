@@ -13,20 +13,20 @@ import (
 	"github.com/touka-aoi/low-level-server/transport/http"
 )
 
+const (
+	protocol = "udp"
+)
+
 func main() {
 	// Parse flags
 	var (
 		address = flag.String("address", "0.0.0.0", "Host to listen on")
 		port    = flag.Int("port", 8080, "Port to listen on")
-		debug   = flag.Bool("debug", false, "Enable debug logging")
 	)
 	flag.Parse()
 
 	// Setup logging
-	logLevel := slog.LevelInfo
-	if *debug {
-		logLevel = slog.LevelDebug
-	}
+	logLevel := slog.LevelDebug
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,
@@ -34,13 +34,18 @@ func main() {
 	slog.SetDefault(logger)
 
 	netEngine := engine.NewUringNetEngine()
-	defer netEngine.Close()
+	defer func() {
+		err := netEngine.Close()
+		if err != nil {
+			slog.Error("Failed netEngine.Close()", "error", err)
+		}
+	}()
 
 	router := http.DefaultHandlers()
 	httpApp := http.NewHTTPApplication(router)
 
 	config := server.NetworkServerConfig{
-		Protocol: "tcp",
+		Protocol: protocol,
 		Address:  *address,
 		Port:     *port,
 	}

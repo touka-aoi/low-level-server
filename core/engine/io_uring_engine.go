@@ -4,9 +4,13 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"slices"
+	"unsafe"
 
 	"github.com/touka-aoi/low-level-server/core/event"
 	"github.com/touka-aoi/low-level-server/core/io"
@@ -36,27 +40,31 @@ func (e *UringNetEngine) Accept(ctx context.Context, listener Listener) error {
 	return nil
 }
 
+func (e *UringNetEngine) RecvFrom(ctx context.Context, listener Listener) error {
+	op := e.uring.RecvFrom(listener.Fd(), e.encodeUserData(event.EVENT_TYPE_RECVMSG, listener.Fd()))
+	e.uring.Submit(op)
+	return nil
+}
+
 // ReceiveData関数は一つのCQEイベントを処理して、イベントとして返します
 // ここでIO_URINGの依存関係を打ち切ります
 func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
-	// 一度の呼びだしで溜まっているCQEイベントを全て消費します (1ループ60fpsで処理できるイベントの数は考え中です)
-	// ここはチャンネルとかの方がいいのか？
 	cqeEvents, err := e.uring.PeekBatchEvents(64)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(cqeEvents) == 0 {
-		return nil, nil // ここwouldBlockの方がいいか？ そんなことないか
+		return nil, nil // ここwouldBlockの方がいい そんなことあります
 	}
+
+	// slog.DebugContext(ctx, "Received CQE events", "cqeEvents", cqeEvents)
 
 	netEvents := make([]*NetEvent, 0, len(cqeEvents))
 
 	for cqeEvent := range slices.Values(cqeEvents) {
 		userData := e.decodeUserData(cqeEvent.UserData)
 		if cqeEvent.Res < 0 {
-			// ここではCQEエラーを処理します
-			// Acceptの場合とかReadの場合などmultishotをうまく処理しないといけません
 			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
 			panic("CQE event error") // ここはpanicしない方がいいかもしれません
 		}
@@ -98,6 +106,32 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 			})
 		case event.EVENT_TYPE_WRITE:
 			// writeイベントはCQEを発行しない
+		case event.EVENT_TYPE_RECVMSG:
+			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+				// F_MOREの原因はどうやって判定したらいいのか
+				slog.DebugContext(ctx, "No more data to receive", "fd", userData.fd)
+				op := e.uring.RecvFrom(userData.fd, e.encodeUserData(event.EVENT_TYPE_RECVMSG, userData.fd))
+				e.uring.Submit(op)
+			}
+			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER == 0 {
+				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
+				return nil, nil
+			}
+			idx := cqeEvent.Flags >> io.IORING_CQE_BUFFER_SHIFT
+			buff := e.uring.GetRingBuffer(uint16(idx))
+			b := make([]byte, cqeEvent.Res)
+			copy(b, buff[:cqeEvent.Res])
+			addrBytes := unsafe.Slice(e.uring.Msghdr.Name, e.uring.Msghdr.Namelen)
+			slog.DebugContext(ctx, "addres Bytes", "addrBytes", addrBytes, "length", len(addrBytes), "addrByte", e.uring.Addr)
+			family := binary.LittleEndian.Uint16(addrBytes[0:2])
+			if family == unix.AF_INET && len(addrBytes) >= 16 {
+				// IPv4の場合
+				port := binary.BigEndian.Uint16(addrBytes[2:4])
+				ip := net.IPv4(addrBytes[4], addrBytes[5], addrBytes[6], addrBytes[7])
+				remoteAddr := fmt.Sprintf("%s:%d", ip, port)
+				slog.DebugContext(ctx, "remote Addr", "remoteAddr", remoteAddr)
+			}
+			slog.DebugContext(ctx, "Received data from peer", "fd", userData.fd, "dataLength", cqeEvent.Res, "msgHdr", e.uring.Msghdr, "data", b)
 		default:
 			// 他のイベントタイプはここで処理する必要があります
 			// なんかエラーを出したいなぁという気分ではあります。

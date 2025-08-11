@@ -4,6 +4,8 @@ package io
 
 import (
 	"encoding/binary"
+	"errors"
+	"log/slog"
 	"net/netip"
 	"unsafe"
 
@@ -20,11 +22,28 @@ type Socket struct {
 	LocalAddr string
 }
 
-func CreateSocket() *Socket {
+func CreateTCPSocket() *Socket {
 	fd, _, errno := unix.Syscall6(
 		unix.SYS_SOCKET,
 		unix.AF_INET,
 		unix.SOCK_STREAM|unix.SOCK_CLOEXEC,
+		0,
+		0,
+		0,
+		0)
+
+	if fd < 0 {
+		panic(errno)
+	}
+
+	return &Socket{Fd: int32(fd)}
+}
+
+func CreateUDPSocket() *Socket {
+	fd, _, errno := unix.Syscall6(
+		unix.SYS_SOCKET,
+		unix.AF_INET,
+		unix.SOCK_DGRAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK,
 		0,
 		0,
 		0,
@@ -67,7 +86,7 @@ func (s *Socket) Bind(address netip.AddrPort) {
 	s.LocalAddr = address.String()
 }
 
-func (s *Socket) Listen(maxConn int) {
+func (s *Socket) Listen(maxConn int) error {
 	res, _, errno := unix.Syscall6(
 		unix.SYS_LISTEN,
 		uintptr(s.Fd),
@@ -78,8 +97,11 @@ func (s *Socket) Listen(maxConn int) {
 		0)
 
 	if res != 0 {
-		panic(errno)
+		slog.Error("Failed to listen", "errno", errno, "err", errno.Error())
+		return errors.New(errno.Error())
 	}
+
+	return nil
 }
 
 func (s *Socket) Close() error {

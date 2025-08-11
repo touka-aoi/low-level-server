@@ -17,6 +17,10 @@ type TCPListener struct {
 	socket *io.Socket
 }
 
+type UDPListener struct {
+	socket *io.Socket
+}
+
 func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener, error) {
 	switch protocol {
 	case "tcp":
@@ -25,11 +29,25 @@ func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener
 			return nil, err
 		}
 
-		s := io.CreateSocket()
+		s := io.CreateTCPSocket()
 		s.Bind(addr)
-		s.Listen(listenMaxConnection)
+		err = s.Listen(listenMaxConnection)
+		if err != nil {
+			return nil, err
+		}
 
 		return &TCPListener{
+			socket: s,
+		}, nil
+	case "udp":
+		addr, err := netip.ParseAddrPort(externalAddress)
+		if err != nil {
+			return nil, err
+		}
+		s := io.CreateUDPSocket()
+		s.Bind(addr)
+
+		return &UDPListener{
 			socket: s,
 		}, nil
 	}
@@ -46,5 +64,17 @@ func (l *TCPListener) Close() error {
 }
 
 func (l *TCPListener) Fd() int32 {
+	return l.socket.Fd
+}
+
+func (l *UDPListener) Close() error {
+	err := l.socket.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *UDPListener) Fd() int32 {
 	return l.socket.Fd
 }

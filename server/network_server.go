@@ -60,8 +60,10 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 					ns.handleAccept(ctx, NetEvent)
 				case event.EVENT_TYPE_READ:
 					ns.handleRead(NetEvent)
-				// case event.EVENT_TYPE_WRITE:
-				// 	ns.handleWrite(NetEvent)
+					// case event.EVENT_TYPE_WRITE:
+					// 	ns.handleWrite(NetEvent)
+				case event.EVENT_TYPE_RECVMSG:
+					slog.DebugContext(ctx, "Received data from peer", "fd", NetEvent.Fd, "dataLength", len(NetEvent.Data), "data", string(NetEvent.Data))
 				default:
 					// 未知のイベントタイプの処理
 				}
@@ -78,9 +80,17 @@ func (ns *NetworkServer) Listen(ctx context.Context) error {
 	}
 	ns.listener = listener
 
-	if err := ns.engine.Accept(ctx, listener); err != nil {
-		slog.ErrorContext(ctx, "Failed to start accepting connections", "error", err)
-		return err
+	switch ns.config.Protocol {
+	case "tcp":
+		if err := ns.engine.Accept(ctx, listener); err != nil {
+			slog.ErrorContext(ctx, "Failed to start accepting connections", "error", err)
+			return err
+		}
+	case "udp":
+		if err := ns.engine.RecvFrom(ctx, listener); err != nil {
+			slog.ErrorContext(ctx, "Failed to start receiving data", "error", err)
+			return err
+		}
 	}
 
 	slog.Info("Listening on", "address", addr)

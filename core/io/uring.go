@@ -47,6 +47,10 @@ type Uring struct {
 	pRingBuffer        []uringBuf // mmapしたバッファのポインタ
 	pRingData          []byte     // mmapしたデータのポインタ
 	pRingBufferBasePtr uintptr    // バッファのベースアドレス
+
+	// ヘッダーとかやってみるかぁ
+	Msghdr unix.Msghdr
+	Addr   []byte
 }
 
 type SQ struct {
@@ -208,6 +212,28 @@ func (u *Uring) AcceptMultishot(fd int32, userData uint64) *UringSQE {
 		Fd:       fd,
 		UserData: userData,
 	}
+	return op
+}
+
+func (u *Uring) RecvFrom(fd int32, userData uint64) *UringSQE {
+	addr := make([]byte, unix.SizeofSockaddrInet6)
+	u.Addr = addr
+	u.Msghdr = unix.Msghdr{
+		Name:       &addr[0],
+		Namelen:    unix.SizeofSockaddrInet6,
+		Control:    nil,
+		Controllen: 0,
+	}
+	op := &UringSQE{
+		Opcode:   IORING_OP_RECVMSG,
+		Ioprio:   0,
+		Flags:    IOSQE_BUFFER_SELECT,
+		BufIndex: 1,
+		Fd:       fd,
+		UserData: userData,
+		Address:  uint64(uintptr(unsafe.Pointer(&u.Msghdr))),
+	}
+	slog.Debug("RecvFrom", "opcode", op.Opcode, "ioprio", op.Ioprio, "fd", op.Fd)
 	return op
 }
 
@@ -571,6 +597,11 @@ const (
 	IORING_ACCEPT_MULTISHOT = 1 << iota
 	IORING_ACCEPT_DONTWAIT
 	IORING_ACCEPT_POLL_FIRST
+)
+
+const (
+	IORING_RECVSEND_POLL_FIRST = 1 << iota
+	IORING_RECV_MULTISHOT
 )
 
 const (
