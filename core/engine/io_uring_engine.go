@@ -23,6 +23,7 @@ type userData struct {
 }
 
 type SockAddr struct {
+	Fd         int32
 	LocalAddr  netip.AddrPort
 	RemoteAddr netip.AddrPort
 }
@@ -217,6 +218,7 @@ func (e *UringNetEngine) GetSockAddr(ctx context.Context, fd int32) (*SockAddr, 
 	}
 
 	return &SockAddr{
+		Fd:         fd,
 		LocalAddr:  localAddrPort,
 		RemoteAddr: remoteAddrPort,
 	}, nil

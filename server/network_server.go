@@ -109,7 +109,7 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 		slog.ErrorContext(ctx, "Failed to get peer name", "fd", newFd, "error", err)
 		return
 	}
-	peer := engine.NewPeer(newFd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
+	peer := engine.NewPeer(sockAddr.Fd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
 	slog.DebugContext(ctx, "Accepted new connection", "fd", newFd, "localAddr", peer.LocalAddr, "remoteAddr", peer.RemoteAddr)
 
 	ns.connections[newFd] = *peer

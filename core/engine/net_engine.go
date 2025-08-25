@@ -37,6 +37,6 @@ type NetEngine interface {
 	RegisterRead(ctx context.Context, peer *Peer) error
 	Write(ctx context.Context, fd int32, data []byte) error
 	PrepareClose() error
-	GetSockAddr(ctx context.Context, fd int32) (*Peer, error)
+	GetSockAddr(ctx context.Context, fd int32) (*SockAddr, error)
 	Close() error
 }
