@@ -20,7 +20,7 @@ const (
 func main() {
 	// Parse flags
 	var (
-		address = flag.String("address", "0.0.0.0", "Host to listen on")
+		address = flag.String("address", "127.0.0.1", "Host to listen on")
 		port    = flag.Int("port", 8080, "Port to listen on")
 	)
 	flag.Parse()
