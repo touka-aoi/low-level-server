@@ -22,6 +22,14 @@ type Peer struct {
 	RemoteAddr netip.AddrPort
 }
 
+func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Peer {
+	return &Peer{
+		Fd:         fd,
+		LocalAddr:  localAddr,
+		RemoteAddr: remoteAddr,
+	}
+}
+
 type NetEngine interface {
 	Accept(ctx context.Context, listener Listener) error
 	RecvFrom(ctx context.Context, listener Listener) error
@@ -29,6 +37,6 @@ type NetEngine interface {
 	RegisterRead(ctx context.Context, peer *Peer) error
 	Write(ctx context.Context, fd int32, data []byte) error
 	PrepareClose() error
-	GetPeerName(ctx context.Context, fd int32) (*Peer, error)
+	GetSockAddr(ctx context.Context, fd int32) (*Peer, error)
 	Close() error
 }

@@ -22,6 +22,11 @@ type userData struct {
 	fd        int32
 }
 
+type SockAddr struct {
+	LocalAddr  netip.AddrPort
+	RemoteAddr netip.AddrPort
+}
+
 type UringNetEngine struct {
 	uring *io.Uring
 }
@@ -176,7 +181,7 @@ func (e *UringNetEngine) decodeUserData(data uint64) *userData {
 	}
 }
 
-func (e *UringNetEngine) GetPeerName(ctx context.Context, fd int32) (*Peer, error) {
+func (e *UringNetEngine) GetSockAddr(ctx context.Context, fd int32) (*SockAddr, error) {
 	localSockAddr, err := unix.Getsockname(int(fd))
 	if err != nil {
 		return nil, err
@@ -211,8 +216,7 @@ func (e *UringNetEngine) GetPeerName(ctx context.Context, fd int32) (*Peer, erro
 		return nil, unix.EAFNOSUPPORT
 	}
 
-	return &Peer{
-		Fd:         fd,
+	return &SockAddr{
 		LocalAddr:  localAddrPort,
 		RemoteAddr: remoteAddrPort,
 	}, nil

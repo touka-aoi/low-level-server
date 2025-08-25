@@ -59,7 +59,7 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 				case event.EVENT_TYPE_ACCEPT:
 					ns.handleAccept(ctx, NetEvent)
 				case event.EVENT_TYPE_READ:
-					ns.handleRead(NetEvent)
+					ns.handleRead(ctx, NetEvent)
 					// case event.EVENT_TYPE_WRITE:
 					// 	ns.handleWrite(NetEvent)
 				case event.EVENT_TYPE_RECVMSG:
@@ -104,12 +104,12 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 		return
 	}
 
-	peer, err := ns.engine.GetPeerName(ctx, newFd)
+	sockAddr, err := ns.engine.GetSockAddr(ctx, newFd)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to get peer name", "fd", newFd, "error", err)
 		return
 	}
-
+	peer := engine.NewPeer(newFd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
 	slog.DebugContext(ctx, "Accepted new connection", "fd", newFd, "localAddr", peer.LocalAddr, "remoteAddr", peer.RemoteAddr)
 
 	ns.connections[newFd] = *peer
@@ -131,7 +131,7 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 	}
 }
 
-func (ns *NetworkServer) handleRead(event *engine.NetEvent) {
+func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent) {
 	fd := event.Fd
 	data := event.Data
 
@@ -165,7 +165,6 @@ func (ns *NetworkServer) handleRead(event *engine.NetEvent) {
 
 	// Applicationに処理を委譲
 	if ns.app != nil {
-		ctx := context.Background()
 		response, err := ns.app.OnData(ctx, &peer, data)
 		if err != nil {
 			slog.Error("Application error", "fd", fd, "error", err)
