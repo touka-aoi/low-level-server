@@ -12,8 +12,8 @@ import (
 	"slices"
 	"unsafe"
 
+	"github.com/touka-aoi/low-level-server/core/core"
 	"github.com/touka-aoi/low-level-server/core/event"
-	"github.com/touka-aoi/low-level-server/core/io"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,12 +29,12 @@ type SockAddr struct {
 }
 
 type UringNetEngine struct {
-	uring *io.Uring
+	uring *core.Uring
 }
 
 func NewUringNetEngine() *UringNetEngine {
-	uring := io.CreateUring(4096)
-	uring.RegisterRingBuffer(256, io.MaxBufferSize, 1)
+	uring := core.CreateUring(4096)
+	uring.RegisterRingBuffer(256, core.MaxBufferSize, 1)
 	return &UringNetEngine{
 		uring: uring,
 	}
@@ -83,7 +83,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				Data:      nil,
 			})
 		case event.EVENT_TYPE_READ:
-			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+			if cqeEvent.Flags&core.IORING_CQE_F_MORE == 0 {
 				// 再度Readイベントを起こす
 				// 再度必要用のイベントで返せばいいか？？？考え中...
 			}
@@ -93,11 +93,11 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				return nil, nil
 			}
 
-			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER == 0 {
+			if cqeEvent.Flags&core.IORING_CQE_F_BUFFER == 0 {
 				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
 				return nil, nil
 			}
-			idx := cqeEvent.Flags >> io.IORING_CQE_BUFFER_SHIFT
+			idx := cqeEvent.Flags >> core.IORING_CQE_BUFFER_SHIFT
 			buff := e.uring.GetRingBuffer(uint16(idx))
 			// recvの場合ここからvalidationが必要
 			slog.DebugContext(ctx, "Read buffer", "fd", userData.fd, "bufferIndex", idx, "dataLength", len(buff))
@@ -113,11 +113,11 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		case event.EVENT_TYPE_WRITE:
 			// writeイベントはCQEを発行しない
 		case event.EVENT_TYPE_RECVMSG:
-			if cqeEvent.Flags&io.IORING_CQE_F_BUFFER == 0 {
+			if cqeEvent.Flags&core.IORING_CQE_F_BUFFER == 0 {
 				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
 				return nil, nil
 			}
-			idx := cqeEvent.Flags >> io.IORING_CQE_BUFFER_SHIFT
+			idx := cqeEvent.Flags >> core.IORING_CQE_BUFFER_SHIFT
 			buff := e.uring.GetRingBuffer(uint16(idx))
 			b := make([]byte, cqeEvent.Res)
 			copy(b, buff[:cqeEvent.Res])
@@ -132,7 +132,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				addr := fmt.Sprintf("%s:%d", ip, port)
 				remoteAddr = netip.MustParseAddrPort(addr)
 			}
-			if cqeEvent.Flags&io.IORING_CQE_F_MORE == 0 {
+			if cqeEvent.Flags&core.IORING_CQE_F_MORE == 0 {
 				// F_MOREの原因はどうやって判定したらいいのか
 				slog.DebugContext(ctx, "F_MORE flag not set, submitting new recvmsg operation", "fd", userData.fd)
 				op := e.uring.RecvFrom(userData.fd, e.encodeUserData(event.EVENT_TYPE_RECVMSG, userData.fd))

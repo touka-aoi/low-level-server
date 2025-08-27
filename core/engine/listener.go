@@ -5,7 +5,7 @@ package engine
 import (
 	"net/netip"
 
-	"github.com/touka-aoi/low-level-server/core/io"
+	"github.com/touka-aoi/low-level-server/core/core"
 )
 
 type Listener interface {
@@ -14,11 +14,11 @@ type Listener interface {
 }
 
 type TCPListener struct {
-	socket *io.Socket
+	socket *core.Socket
 }
 
 type UDPListener struct {
-	socket *io.Socket
+	socket *core.Socket
 }
 
 func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener, error) {
@@ -29,7 +29,7 @@ func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener
 			return nil, err
 		}
 
-		s := io.CreateTCPSocket()
+		s := core.CreateTCPSocket()
 		s.Bind(addr)
 		err = s.Listen(listenMaxConnection)
 		if err != nil {
@@ -44,7 +44,7 @@ func Listen(protocol, externalAddress string, listenMaxConnection int) (Listener
 		if err != nil {
 			return nil, err
 		}
-		s := io.CreateUDPSocket()
+		s := core.CreateUDPSocket()
 		s.Bind(addr)
 
 		return &UDPListener{

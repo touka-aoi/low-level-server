@@ -1,6 +1,6 @@
 //go:build linux
 
-package io
+package core
 
 import (
 	"log/slog"
