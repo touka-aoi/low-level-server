@@ -20,9 +20,12 @@ func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *engine.Peer) erro
 }
 
 func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error) {
-	peer.Feed(data)
+	if err := peer.Feed(data); err != nil {
+		return nil, err
+	}
 	for {
-		header, ok := peer.Peek(HeaderSize)
+		header := make([]byte, HeaderSize)
+		ok := peer.Peek(header)
 		if !ok {
 			return nil, errors.New("invalid header")
 		}
@@ -32,16 +35,17 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		length := binary.BigEndian.Uint32(header[3:7])
 		total := HeaderSize + int(length)
 		// if total > maxFrameSize {...}
-		full, ok := peer.Peek(total)
+		b := make([]byte, total)
+		ok = peer.Peek(b)
 		if !ok {
 			return nil, errors.New("ErrNeedMore")
 		}
-		peer.Advance(total)
-		frame, err := ParseFrame(full)
+		frame, err := ParseFrame(b)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to parse frame", "error", err)
 		}
 		l.processFrame(ctx, frame)
+		peer.Advance(total)
 	}
 }
 

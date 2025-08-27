@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/netip"
 
+	"github.com/touka-aoi/low-level-server/core/buffer"
 	"github.com/touka-aoi/low-level-server/core/event"
 )
 
@@ -21,6 +22,7 @@ type Peer struct {
 	LocalAddr  netip.AddrPort
 	RemoteAddr netip.AddrPort
 	buf        []byte
+	ring       *buffer.RingBuffer
 }
 
 func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Peer {
@@ -28,23 +30,28 @@ func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Pee
 		Fd:         fd,
 		LocalAddr:  localAddr,
 		RemoteAddr: remoteAddr,
-		buf:        make([]byte, 4096),
+		ring:       buffer.NewRingBuffer(4096),
 	}
 }
 
-func (p *Peer) Feed(data []byte) {
-	p.buf = append(p.buf, data...)
+func (p *Peer) Feed(data []byte) error {
+	_, err := p.ring.Write(data)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (p *Peer) Advance(n int) {
-	p.buf = p.buf[n:]
+	p.ring.Consume(n)
 }
 
-func (p *Peer) Peek(n int) (b []byte, ok bool) {
-	if len(p.buf) < n {
-		return nil, false
-	}
-	return p.buf[:n], true
+func (p *Peer) Peek(b []byte) bool {
+	return p.ring.Peek(b)
+}
+
+func (p *Peer) View(n int) ([]byte, []byte, bool) {
+	return p.ring.View(n)
 }
 
 type NetEngine interface {
