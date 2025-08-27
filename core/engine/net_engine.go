@@ -20,6 +20,7 @@ type Peer struct {
 	Fd         int32
 	LocalAddr  netip.AddrPort
 	RemoteAddr netip.AddrPort
+	buf        []byte
 }
 
 func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Peer {
@@ -27,7 +28,23 @@ func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Pee
 		Fd:         fd,
 		LocalAddr:  localAddr,
 		RemoteAddr: remoteAddr,
+		buf:        make([]byte, 4096),
 	}
+}
+
+func (p *Peer) Feed(data []byte) {
+	p.buf = append(p.buf, data...)
+}
+
+func (p *Peer) Advance(n int) {
+	p.buf = p.buf[n:]
+}
+
+func (p *Peer) Peek(n int) (b []byte, ok bool) {
+	if len(p.buf) < n {
+		return nil, false
+	}
+	return p.buf[:n], true
 }
 
 type NetEngine interface {

@@ -2,6 +2,8 @@ package streaming
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"log/slog"
 
 	"github.com/touka-aoi/low-level-server/core/engine"
@@ -18,13 +20,29 @@ func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *engine.Peer) erro
 }
 
 func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error) {
-	// buffered Peerにして、パースができなかったときはpeerにためて再度データが来るのを待たないといけない
-	frame, err := ParseFrame(data)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to parse frame", "error", err)
+	peer.Feed(data)
+	for {
+		header, ok := peer.Peek(HeaderSize)
+		if !ok {
+			return nil, errors.New("invalid header")
+		}
+		if binary.BigEndian.Uint16(header[0:2]) != MagicNumber {
+			return nil, errors.New("ErrBadMagic")
+		}
+		length := binary.BigEndian.Uint32(header[3:7])
+		total := HeaderSize + int(length)
+		// if total > maxFrameSize {...}
+		full, ok := peer.Peek(total)
+		if !ok {
+			return nil, errors.New("ErrNeedMore")
+		}
+		peer.Advance(total)
+		frame, err := ParseFrame(full)
+		if err != nil {
+			slog.ErrorContext(ctx, "Failed to parse frame", "error", err)
+		}
+		l.processFrame(ctx, frame)
 	}
-	l.processFrame(ctx, frame)
-	return nil, nil
 }
 
 func (l *LiveStreamingApp) processFrame(ctx context.Context, frame *Frame) {
