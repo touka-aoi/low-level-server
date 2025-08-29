@@ -33,6 +33,14 @@ func CreateTCPSocket() *Socket {
 		0)
 
 	if fd < 0 {
+		slog.Error("Failed to create socket", "errno", errno, "err", errno.Error())
+		panic(errno)
+	}
+
+	opVal := int32(1)
+	_, _, errno = unix.Syscall6(unix.SYS_SETSOCKOPT, fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, uintptr(unsafe.Pointer(&opVal)), unsafe.Sizeof(opVal), 0)
+	if errno != 0 {
+		slog.Error("Failed to set socket option", "errno", errno, "err", errno.Error())
 		panic(errno)
 	}
 
