@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/netip"
 
+	"github.com/google/uuid"
 	"github.com/touka-aoi/low-level-server/core/buffer"
 	"github.com/touka-aoi/low-level-server/core/event"
 )
@@ -18,6 +19,7 @@ type NetEvent struct {
 }
 
 type Peer struct {
+	SessionID  string
 	Fd         int32
 	LocalAddr  netip.AddrPort
 	RemoteAddr netip.AddrPort
@@ -26,7 +28,9 @@ type Peer struct {
 }
 
 func NewPeer(fd int32, localAddr netip.AddrPort, remoteAddr netip.AddrPort) *Peer {
+	sessionID := uuid.NewString()
 	return &Peer{
+		SessionID:  sessionID,
 		Fd:         fd,
 		LocalAddr:  localAddr,
 		RemoteAddr: remoteAddr,

@@ -11,8 +11,14 @@ import (
 	"github.com/touka-aoi/low-level-server/transport/protocol"
 )
 
+// これはトランスポート層とアプリケーション層の橋渡しをする
 type LiveStreamingApp struct {
 	handler protocol.LiveProtocol
+}
+
+type FrameMessage struct {
+	Frame     *protocol.Frame
+	SessionID string
 }
 
 func NewLiveStreaming() *LiveStreamingApp {
@@ -57,7 +63,8 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to parse frame", "error", err)
 		}
-		slog.DebugContext(ctx, "Received frame", "type", frame.Type, "payload", frame.Payload)
+		frameMessage := FrameMessage{Frame: frame, SessionID: peer.SessionID}
+		slog.DebugContext(ctx, "Received frame", "type", frameMessage.Frame.Type, "payload", frameMessage.Frame.Payload)
 		l.processFrame(ctx, frame)
 		peer.Advance(total)
 	}
