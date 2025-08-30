@@ -10,11 +10,11 @@ import (
 
 	"github.com/touka-aoi/low-level-server/core/engine"
 	"github.com/touka-aoi/low-level-server/server"
-	"github.com/touka-aoi/low-level-server/transport/http"
+	"github.com/touka-aoi/low-level-server/transport/streaming"
 )
 
 const (
-	protocol = "udp"
+	protocol = "tcp"
 )
 
 func main() {
@@ -41,16 +41,15 @@ func main() {
 		}
 	}()
 
-	router := http.DefaultHandlers()
-	httpApp := http.NewHTTPApplication(router)
-
 	config := server.NetworkServerConfig{
 		Protocol: protocol,
 		Address:  *address,
 		Port:     *port,
 	}
 
-	networkServer := server.NewNetworkServer(netEngine, config, httpApp, nil)
+	realTimeApp := &streaming.LiveStreamingApp{}
+
+	networkServer := server.NewNetworkServer(netEngine, config, nil, realTimeApp)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

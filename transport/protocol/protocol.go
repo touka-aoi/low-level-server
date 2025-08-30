@@ -1,4 +1,4 @@
-package streaming
+package protocol
 
 import (
 	"encoding/binary"
@@ -13,7 +13,7 @@ import (
 // +--------+--------+--------+--------+--------+--------+
 
 const (
-	MagicNumber uint16 = 0x4179
+	MagicNumber uint16 = 0x616F
 	HeaderSize         = 7
 
 	TYPE_DATA      = 0x01
@@ -25,6 +25,19 @@ const (
 	CmdConnect    uint8 = 0x03
 	CmdDisconnect uint8 = 0x04
 )
+
+type LiveProtocol interface {
+	JoinRoom()
+	LeaveRoom()
+	Connect()
+	Disconnect()
+	SendData()
+	SendControl()
+	SendHeartbeat()
+	ReceiveData()
+	ReceiveControl()
+	ReceiveHeartbeat()
+}
 
 var (
 	InsufficientData = errors.New("insufficient data")

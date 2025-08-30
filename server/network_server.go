@@ -31,7 +31,7 @@ type NetworkServer struct {
 	app         transport.Transport
 }
 
-func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, app transport.Transport, pipeline *middleware.Pipeline) *NetworkServer {
+func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pipeline *middleware.Pipeline, app transport.Transport) *NetworkServer {
 	return &NetworkServer{
 		engine:      netEngine,
 		config:      config,

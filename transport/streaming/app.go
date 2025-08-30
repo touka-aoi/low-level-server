@@ -8,15 +8,26 @@ import (
 
 	"github.com/touka-aoi/low-level-server/core/engine"
 	"github.com/touka-aoi/low-level-server/transport"
+	"github.com/touka-aoi/low-level-server/transport/protocol"
 )
 
 type LiveStreamingApp struct {
+	handler protocol.LiveProtocol
+}
+
+func NewLiveStreaming() *LiveStreamingApp {
+	return &LiveStreamingApp{}
+}
+
+func (l *LiveStreamingApp) SetHandler(handler protocol.LiveProtocol) {
+	l.handler = handler
 }
 
 func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *engine.Peer) error {
 	//TODO implement me
 	// 認証情報の検証や接続管理などをここに入れたい
-	panic("implement me")
+	//panic("implement me")
+	return nil
 }
 
 func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error) {
@@ -24,38 +35,44 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		return nil, err
 	}
 	for {
-		header := make([]byte, HeaderSize)
+		header := make([]byte, protocol.HeaderSize)
 		ok := peer.Peek(header)
 		if !ok {
+			slog.DebugContext(ctx, "Need more data")
 			return nil, errors.New("invalid header")
 		}
-		if binary.BigEndian.Uint16(header[0:2]) != MagicNumber {
+		if binary.BigEndian.Uint16(header[0:2]) != protocol.MagicNumber {
+			slog.DebugContext(ctx, "Invalid magic number", "magic", binary.BigEndian.Uint16(header[0:2]))
 			return nil, errors.New("ErrBadMagic")
 		}
 		length := binary.BigEndian.Uint32(header[3:7])
-		total := HeaderSize + int(length)
+		total := protocol.HeaderSize + int(length)
 		// if total > maxFrameSize {...}
 		b := make([]byte, total)
 		ok = peer.Peek(b)
 		if !ok {
 			return nil, errors.New("ErrNeedMore")
 		}
-		frame, err := ParseFrame(b)
+		frame, err := protocol.ParseFrame(b)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to parse frame", "error", err)
 		}
+		slog.DebugContext(ctx, "Received frame", "type", frame.Type, "payload", frame.Payload)
 		l.processFrame(ctx, frame)
 		peer.Advance(total)
 	}
 }
 
-func (l *LiveStreamingApp) processFrame(ctx context.Context, frame *Frame) {
+func (l *LiveStreamingApp) processFrame(ctx context.Context, frame *protocol.Frame) {
 	switch frame.Type {
-	case TYPE_DATA:
+	case protocol.TYPE_DATA:
+		l.handler.ReceiveData()
 		slog.InfoContext(ctx, "Received data frame", "length", len(frame.Payload))
-	case TYPE_CONTROL:
+	case protocol.TYPE_CONTROL:
+		l.handler.ReceiveControl()
 		slog.InfoContext(ctx, "Received control frame", "length", len(frame.Payload))
-	case TYPE_HEARTBEAT:
+	case protocol.TYPE_HEARTBEAT:
+		l.handler.ReceiveHeartbeat()
 		slog.InfoContext(ctx, "Received heartbeat frame")
 	}
 }
