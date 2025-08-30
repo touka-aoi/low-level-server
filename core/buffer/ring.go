@@ -1,6 +1,9 @@
 package buffer
 
-import "errors"
+import (
+	"errors"
+	"log/slog"
+)
 
 var (
 	ErrBufferFull = errors.New("buffer is full")
@@ -48,7 +51,15 @@ func (r *RingBuffer) free() int {
 }
 
 func (r *RingBuffer) advance(n int) {
-	r.tail += uint64(n)
+	if n <= 0 {
+		slog.Warn("Invalid advance value", "n", n)
+		return
+	}
+	if n > r.length() {
+		slog.Warn("Invalid advance value exceeds buffer length", "n", n, "length", r.length())
+		n = r.length()
+	}
+	r.head += uint64(n)
 }
 
 func (r *RingBuffer) Write(b []byte) (int, error) {
@@ -58,7 +69,7 @@ func (r *RingBuffer) Write(b []byte) (int, error) {
 	i := int(r.tail & r.mask)
 	n1 := copy(r.buf[i:], b)
 	n2 := copy(r.buf, b[n1:])
-	r.head += uint64(n1 + n2)
+	r.tail += uint64(n1 + n2)
 	return n1 + n2, nil
 }
 
@@ -78,7 +89,7 @@ func (r *RingBuffer) View(n int) (a, b []byte, ok bool) {
 	if n > r.length() {
 		return nil, nil, false
 	}
-	i := int(r.tail & r.mask)
+	i := int(r.head & r.mask)
 	if i+n <= len(r.buf) {
 		return r.buf[i : i+n : i+n], nil, true
 	}
