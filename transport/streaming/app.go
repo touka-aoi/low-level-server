@@ -66,13 +66,19 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 func (l *LiveStreamingApp) processFrame(ctx context.Context, frame *protocol.Frame) {
 	switch frame.Type {
 	case protocol.TYPE_DATA:
-		l.handler.ReceiveData()
+		if l.handler != nil {
+			l.handler.ReceiveData()
+		}
 		slog.InfoContext(ctx, "Received data frame", "length", len(frame.Payload))
 	case protocol.TYPE_CONTROL:
-		l.handler.ReceiveControl()
+		if l.handler != nil {
+			l.handler.ReceiveControl()
+		}
 		slog.InfoContext(ctx, "Received control frame", "length", len(frame.Payload))
 	case protocol.TYPE_HEARTBEAT:
-		l.handler.ReceiveHeartbeat()
+		if l.handler != nil {
+			l.handler.ReceiveHeartbeat()
+		}
 		slog.InfoContext(ctx, "Received heartbeat frame")
 	}
 }

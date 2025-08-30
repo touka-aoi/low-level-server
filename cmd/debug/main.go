@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/touka-aoi/low-level-server/application/live"
 	"github.com/touka-aoi/low-level-server/core/engine"
 	"github.com/touka-aoi/low-level-server/server"
 	"github.com/touka-aoi/low-level-server/transport/streaming"
@@ -47,7 +48,9 @@ func main() {
 		Port:     *port,
 	}
 
-	realTimeApp := &streaming.LiveStreamingApp{}
+	realTimeHandler := live.NewLiveHandler()
+	realTimeApp := streaming.NewLiveStreaming()
+	realTimeApp.SetHandler(realTimeHandler)
 
 	networkServer := server.NewNetworkServer(netEngine, config, nil, realTimeApp)
 
