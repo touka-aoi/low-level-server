@@ -340,6 +340,21 @@ func (u *Uring) WaitEvent() error {
 	return nil
 }
 
+func (u *Uring) Timeout(d time.Duration, userData uint64) {
+	timeSpec := unix.NsecToTimespec(d.Nanoseconds())
+	op := &UringSQE{
+		Opcode:    IORING_OP_TIMEOUT,
+		Fd:        -1,
+		Address:   uint64(uintptr(unsafe.Pointer(&timeSpec))),
+		UserFlags: IORING_TIMEOUT_ETIME_SUCCESS,
+		Len:       1,
+		Offset:    1,
+		UserData:  userData,
+	}
+
+	u.Submit(op)
+}
+
 func (u *Uring) WaitEventWithTimeout(d time.Duration) error {
 	timeSpec := unix.NsecToTimespec(d.Nanoseconds())
 	getEventsArgs := &uringGetEventArgs{
@@ -660,4 +675,8 @@ const (
 
 const (
 	IORING_CQE_BUFFER_SHIFT = 16
+)
+
+const (
+	IORING_TIMEOUT_ETIME_SUCCESS = 1 << 5
 )

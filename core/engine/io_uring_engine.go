@@ -154,6 +154,8 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				Data:       b,
 				RemoteAddr: remoteAddr,
 			})
+		case event.EVENT_TYPE_TIMEOUT:
+			slog.DebugContext(ctx, "Timeout event")
 		default:
 			slog.WarnContext(ctx, "Unknown event type", "eventType", userData.eventType)
 			// 他のイベントタイプはここで処理する必要があります
@@ -165,13 +167,16 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 }
 
 func (e *UringNetEngine) PrepareClose() error {
+	ud := e.encodeUserData(event.EVENT_TYPE_TIMEOUT, 0)
+	e.uring.Timeout(0, ud)
+	slog.Debug("PrepareClose")
 	return nil
 }
 
 func (e *UringNetEngine) RegisterRead(ctx context.Context, peer *Peer) error {
-	userData := e.encodeUserData(event.EVENT_TYPE_READ, peer.Fd)
-	op := e.uring.ReadMultishot(peer.Fd, userData)
-	slog.DebugContext(ctx, "Registering read operation", "fd", peer.Fd, "userData", userData)
+	ud := e.encodeUserData(event.EVENT_TYPE_READ, peer.Fd)
+	op := e.uring.ReadMultishot(peer.Fd, ud)
+	slog.DebugContext(ctx, "Registering read operation", "fd", peer.Fd, "userData", ud)
 	e.uring.Submit(op)
 	return nil
 }
@@ -181,8 +186,8 @@ func (e *UringNetEngine) Close() error {
 }
 
 func (e *UringNetEngine) encodeUserData(ev event.EventType, fd int32) uint64 {
-	userData := uint64(ev)<<32 | uint64(fd)
-	return userData
+	ud := uint64(ev)<<32 | uint64(fd)
+	return ud
 }
 
 func (e *UringNetEngine) decodeUserData(data uint64) *userData {
