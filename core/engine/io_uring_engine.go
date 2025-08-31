@@ -10,9 +10,11 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"time"
 	"unsafe"
 
 	"github.com/touka-aoi/low-level-server/core/core"
+	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
 	"github.com/touka-aoi/low-level-server/core/event"
 	"golang.org/x/sys/unix"
 )
@@ -30,6 +32,14 @@ type SockAddr struct {
 
 type UringNetEngine struct {
 	uring *core.Uring
+}
+
+func (e *UringNetEngine) WaitEvent() error {
+	return e.uring.WaitEvent()
+}
+
+func (e *UringNetEngine) WaitEventWithTimeout(d time.Duration) error {
+	return e.uring.WaitEventWithTimeout(d)
 }
 
 func NewUringNetEngine() *UringNetEngine {
@@ -61,7 +71,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	}
 
 	if len(cqeEvents) == 0 {
-		return nil, nil // ここwouldBlockの方がいい そんなことあります
+		return nil, toukaerrors.ErrWouldBlock // ここwouldBlockの方がいい そんなことあります
 	}
 
 	// slog.DebugContext(ctx, "Received CQE events", "cqeEvents", cqeEvents)

@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 
 	"github.com/touka-aoi/low-level-server/core/engine"
+	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
 	"github.com/touka-aoi/low-level-server/core/event"
 	"github.com/touka-aoi/low-level-server/middleware"
 	"github.com/touka-aoi/low-level-server/transport"
@@ -50,7 +52,12 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 		default:
 			netEvents, err := ns.engine.ReceiveData(ctx)
 			if err != nil {
-				// エラー処理
+				if errors.Is(err, toukaerrors.ErrWouldBlock) {
+					err := ns.engine.WaitEvent()
+					if err != nil {
+						slog.ErrorContext(ctx, "Failed to wait event", "error", err)
+					}
+				}
 				continue
 			}
 

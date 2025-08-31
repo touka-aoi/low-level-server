@@ -62,6 +62,7 @@ type NetEngine interface {
 	Accept(ctx context.Context, listener Listener) error
 	RecvFrom(ctx context.Context, listener Listener) error
 	ReceiveData(ctx context.Context) ([]*NetEvent, error)
+	WaitEvent() error
 	RegisterRead(ctx context.Context, peer *Peer) error
 	Write(ctx context.Context, fd int32, data []byte) error
 	PrepareClose() error

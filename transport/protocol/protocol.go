@@ -5,6 +5,8 @@ import (
 	"errors"
 )
 
+//TODO: timestamp, frame sequence情報を入れる
+
 // HEADER LAYOUT
 // +--------+--------+--------+--------+--------+--------+
 // | Magic(2 bytes) | Type(1)|   Length(4 bytes)       |

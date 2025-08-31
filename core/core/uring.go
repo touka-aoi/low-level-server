@@ -3,9 +3,11 @@
 package core
 
 import (
+	"errors"
 	"log/slog"
 	"runtime"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
@@ -321,7 +323,7 @@ func (u *Uring) sendSQE() {
 	}
 }
 
-func (u *Uring) WaitEvent() (*UringCQE, error) {
+func (u *Uring) WaitEvent() error {
 	_, _, errno := unix.Syscall6(
 		unix.SYS_IO_URING_ENTER,
 		uintptr(u.Fd),
@@ -332,11 +334,42 @@ func (u *Uring) WaitEvent() (*UringCQE, error) {
 		0)
 
 	if errno != 0 {
-		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error())
-		return nil, errno
+		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error(), "errno", int(errno))
+		return errno
+	}
+	return nil
+}
+
+func (u *Uring) WaitEventWithTimeout(d time.Duration) error {
+	timeSpec := unix.NsecToTimespec(d.Nanoseconds())
+	getEventsArgs := &uringGetEventArgs{
+		sigMask:    0,
+		sigMask_sz: 0,
+		pad:        0,
+		ts:         uint64(uintptr(unsafe.Pointer(&timeSpec))),
 	}
 
-	return u.getCQE(), nil
+	t1 := time.Now()
+
+	_, _, errno := unix.Syscall6(
+		unix.SYS_IO_URING_ENTER,
+		uintptr(u.Fd),
+		0,
+		1,
+		IORING_ENTER_GETEVENTS|IORING_ENTER_EXT_ARG,
+		uintptr(unsafe.Pointer(getEventsArgs)),
+		unsafe.Sizeof(*getEventsArgs))
+
+	if errno != 0 {
+		if errors.Is(errno, unix.ETIME) {
+			return toukaerrors.ErrWouldBlock
+		}
+		t2 := time.Now()
+		slog.Debug("wait event", "d", d, "elapsed", t2.Sub(t1))
+		slog.Error("syscall sys_io_uring_enter failed", "err", errno.Error(), "errno", int(errno))
+		return errno
+	}
+	return nil
 }
 
 func (u *Uring) PeekBatchEvents(batch uint32) ([]*UringCQE, error) {
@@ -489,6 +522,13 @@ type uringBufTail struct {
 	Resv2 uint32
 	Resv3 uint16
 	Tail  uint16
+}
+
+type uringGetEventArgs struct {
+	sigMask    uint64
+	sigMask_sz uint32
+	pad        uint32
+	ts         uint64
 }
 
 const (
