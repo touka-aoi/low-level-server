@@ -48,14 +48,17 @@ func main() {
 		Port:     *port,
 	}
 
-	realTimeHandler := live.NewLiveHandler()
-	realTimeApp := streaming.NewLiveStreaming()
-	realTimeApp.SetHandler(realTimeHandler)
-
-	networkServer := server.NewNetworkServer(netEngine, config, nil, realTimeApp)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	frameChannel := make(chan streaming.FrameMessage, 4096)
+	liveConfig := live.LiveConfig{
+		Fps: 30,
+	}
+	liveApp := live.NewLiveApp(liveConfig, frameChannel)
+	realTimeApp := streaming.NewLiveStreaming(frameChannel)
+	liveApp.Run(ctx)
+	networkServer := server.NewNetworkServer(netEngine, config, nil, realTimeApp)
 
 	err := networkServer.Listen(ctx)
 	if err != nil {

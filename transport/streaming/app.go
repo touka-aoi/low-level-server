@@ -12,8 +12,10 @@ import (
 )
 
 // これはトランスポート層とアプリケーション層の橋渡しをする
+// だのでこれが両方から依存されるはず...
 type LiveStreamingApp struct {
 	handler protocol.LiveProtocol
+	chw     chan<- FrameMessage
 }
 
 type FrameMessage struct {
@@ -21,8 +23,10 @@ type FrameMessage struct {
 	SessionID string
 }
 
-func NewLiveStreaming() *LiveStreamingApp {
-	return &LiveStreamingApp{}
+func NewLiveStreaming(chw chan<- FrameMessage) *LiveStreamingApp {
+	return &LiveStreamingApp{
+		chw: chw,
+	}
 }
 
 func (l *LiveStreamingApp) SetHandler(handler protocol.LiveProtocol) {
@@ -40,6 +44,7 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 	if err := peer.Feed(data); err != nil {
 		return nil, err
 	}
+	// 遅延パースの可能性
 	for {
 		header := make([]byte, protocol.HeaderSize)
 		ok := peer.Peek(header)
@@ -65,7 +70,10 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		}
 		frameMessage := FrameMessage{Frame: frame, SessionID: peer.SessionID}
 		slog.DebugContext(ctx, "Received frame", "type", frameMessage.Frame.Type, "payload", frameMessage.Frame.Payload)
-		l.processFrame(ctx, frame)
+		//l.processFrame(ctx, frame)
+		if l.chw != nil {
+			l.chw <- frameMessage
+		}
 		peer.Advance(total)
 	}
 }

@@ -1,50 +1,46 @@
 package live
 
-import "log/slog"
+import (
+	"context"
+	"log/slog"
 
-type LiveHandler struct {
+	"github.com/touka-aoi/low-level-server/transport/streaming"
+)
+
+type LiveApp struct {
+	receiveChannel <-chan streaming.FrameMessage
+	config         LiveConfig
 }
 
-func NewLiveHandler() *LiveHandler {
-	return &LiveHandler{}
+type LiveConfig struct {
+	Fps int
 }
 
-func (l *LiveHandler) JoinRoom() {
-	slog.Debug("JoinRoom")
+func NewLiveApp(config LiveConfig, chr <-chan streaming.FrameMessage) *LiveApp {
+	return &LiveApp{
+		receiveChannel: chr,
+		config:         config,
+	}
 }
 
-func (l *LiveHandler) LeaveRoom() {
-	slog.Debug("LeaveRoom")
+func (l *LiveApp) Run(ctx context.Context) {
+	go l.processLoop(ctx)
 }
 
-func (l *LiveHandler) Connect() {
-	slog.Debug("Connect")
+func (l *LiveApp) processLoop(ctx context.Context) {
+	slog.InfoContext(ctx, "LiveApp started")
+LOOP:
+	for {
+		select {
+		case <-ctx.Done():
+			break LOOP
+		case frame := <-l.receiveChannel:
+			l.processNextFrame(ctx, frame)
+		}
+	}
+	slog.InfoContext(ctx, "LiveApp stopped")
 }
 
-func (l *LiveHandler) Disconnect() {
-	slog.Debug("Disconnect")
-}
-
-func (l *LiveHandler) ReceiveData() {
-	slog.Debug("ReceiveData")
-}
-
-func (l *LiveHandler) SendData() {
-	slog.Debug("SendData")
-}
-
-func (l *LiveHandler) SendControl() {
-	slog.Debug("SendControl")
-}
-
-func (l *LiveHandler) SendHeartbeat() {
-	slog.Debug("SendHeartbeat")
-}
-
-func (l *LiveHandler) ReceiveControl() {
-	slog.Debug("ReceiveControl")
-}
-
-func (l *LiveHandler) ReceiveHeartbeat() {
-	slog.Debug("ReceiveHeartbeat")
+func (l *LiveApp) processNextFrame(ctx context.Context, frame streaming.FrameMessage) {
+	slog.DebugContext(ctx, "process Next Frame", "type", frame.Frame.Type, "payload", frame.Frame.Payload)
 }
