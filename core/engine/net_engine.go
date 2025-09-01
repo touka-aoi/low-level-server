@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"net/netip"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/touka-aoi/low-level-server/core/buffer"
@@ -18,12 +19,34 @@ type NetEvent struct {
 	RemoteAddr netip.AddrPort
 }
 
+// 参考: https://go.googlesource.com/go/%2B/master/src/net/http/server.go#3267
+type ConnState int32
+
+const (
+	StateNew    ConnState = iota
+	StateActive           // has data transfer
+	StateIdle             // keep-alive
+	StateClosed
+)
+
+var stateName = map[ConnState]string{
+	StateNew:    "new",
+	StateActive: "active",
+	StateIdle:   "idle",
+	StateClosed: "closed",
+}
+
+func (s ConnState) String() string {
+	return stateName[s]
+}
+
 type Peer struct {
 	SessionID  string
 	Fd         int32
 	LocalAddr  netip.AddrPort
 	RemoteAddr netip.AddrPort
-	buf        []byte
+	Status     atomic.Int32
+	LastActive atomic.Int64
 	ring       *buffer.RingBuffer
 }
 
@@ -67,5 +90,6 @@ type NetEngine interface {
 	Write(ctx context.Context, fd int32, data []byte) error
 	PrepareClose() error
 	GetSockAddr(ctx context.Context, fd int32) (*SockAddr, error)
+	Pending() error
 	Close() error
 }
