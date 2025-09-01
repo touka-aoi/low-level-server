@@ -34,6 +34,14 @@ type UringNetEngine struct {
 	uring *core.Uring
 }
 
+func (e *UringNetEngine) CancelAccept(ctx context.Context, listener Listener) error {
+	return nil
+}
+
+func (e *UringNetEngine) ClosePeer(ctx context.Context, peer *Peer) error {
+	return nil
+}
+
 func (e *UringNetEngine) WaitEvent() error {
 	return e.uring.WaitEvent()
 }

@@ -83,6 +83,7 @@ func (p *Peer) View(n int) ([]byte, []byte, bool) {
 
 type NetEngine interface {
 	Accept(ctx context.Context, listener Listener) error
+	CancelAccept(ctx context.Context, listener Listener) error
 	RecvFrom(ctx context.Context, listener Listener) error
 	ReceiveData(ctx context.Context) ([]*NetEvent, error)
 	WaitEvent() error
@@ -90,6 +91,6 @@ type NetEngine interface {
 	Write(ctx context.Context, fd int32, data []byte) error
 	PrepareClose() error
 	GetSockAddr(ctx context.Context, fd int32) (*SockAddr, error)
-	Pending() error
+	ClosePeer(ctx context.Context, peer *Peer) error
 	Close() error
 }

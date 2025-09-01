@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/touka-aoi/low-level-server/core/engine"
 	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
@@ -24,59 +25,147 @@ type NetworkServerConfig struct {
 	Port     int
 }
 
+type SrvStatus int
+
+const (
+	Running SrvStatus = iota
+	Draining
+	Stopped
+)
+
+var stateName = map[SrvStatus]string{
+	Running:  "running",
+	Draining: "draining",
+	Stopped:  "stopped",
+}
+
+func (s SrvStatus) String() string {
+	return stateName[s]
+}
+
 type NetworkServer struct {
 	engine      engine.NetEngine
 	listener    engine.Listener
 	config      NetworkServerConfig
-	connections map[int32]engine.Peer
+	connections map[int32]*engine.Peer
 	pipeline    *middleware.Pipeline
 	app         transport.Transport
+	status      SrvStatus
 }
 
 func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pipeline *middleware.Pipeline, app transport.Transport) *NetworkServer {
 	return &NetworkServer{
 		engine:      netEngine,
 		config:      config,
-		connections: make(map[int32]engine.Peer),
+		connections: make(map[int32]*engine.Peer),
 		pipeline:    pipeline,
 		app:         app,
+		//oreore:      oreore, オレオレも所有してオレオレする必要がありそう
 	}
 }
 
 func (ns *NetworkServer) Serve(ctx context.Context) {
-	for {
+	ns.status = Running
+	drainingDeadline := time.Now().Add(time.Second * 10)
+
+	go func() {
 		select {
 		case <-ctx.Done():
-			slog.InfoContext(ctx, "Session manager shutting down")
-			return
-		default:
-			netEvents, err := ns.engine.ReceiveData(ctx)
+			err := ns.engine.PrepareClose()
 			if err != nil {
-				if errors.Is(err, toukaerrors.ErrWouldBlock) {
-					err := ns.engine.WaitEvent()
-					if err != nil {
-						slog.ErrorContext(ctx, "Failed to wait event", "error", err)
-					}
-				}
-				continue
+				slog.ErrorContext(ctx, "Failed to prepare close", "error", err)
 			}
+		}
+	}()
 
-			for NetEvent := range slices.Values(netEvents) {
-				switch NetEvent.EventType {
-				case event.EVENT_TYPE_ACCEPT:
-					ns.handleAccept(ctx, NetEvent)
-				case event.EVENT_TYPE_READ:
-					ns.handleRead(ctx, NetEvent)
-					// case event.EVENT_TYPE_WRITE:
-					// 	ns.handleWrite(NetEvent)
-				case event.EVENT_TYPE_RECVMSG:
-					slog.DebugContext(ctx, "Received data from peer", "fd", NetEvent.Fd, "dataLength", len(NetEvent.Data), "data", string(NetEvent.Data))
-				default:
-					// 未知のイベントタイプの処理
+	for {
+		netEvents, recvError := ns.engine.ReceiveData(ctx)
+		if recvError != nil && !errors.Is(recvError, toukaerrors.ErrWouldBlock) {
+			slog.ErrorContext(ctx, "Failed to receive data", "error", recvError)
+			continue
+		}
+
+		for NetEvent := range slices.Values(netEvents) {
+			switch NetEvent.EventType {
+			case event.EVENT_TYPE_ACCEPT:
+				ns.handleAccept(ctx, NetEvent)
+			case event.EVENT_TYPE_READ:
+				ns.handleRead(ctx, NetEvent)
+				// case event.EVENT_TYPE_WRITE:
+				// 	ns.handleWrite(NetEvent)
+			case event.EVENT_TYPE_RECVMSG:
+				slog.DebugContext(ctx, "Received data from peer", "fd", NetEvent.Fd, "dataLength", len(NetEvent.Data), "data", string(NetEvent.Data))
+			default:
+				// 未知のイベントタイプの処理
+			}
+		}
+
+		if ns.status == Running && ctx.Err() != nil {
+			ns.status = Draining
+			err := ns.PrepareClose(ctx)
+			if err != nil {
+				slog.ErrorContext(ctx, "Failed to prepare shutdown", "error", err)
+			}
+			for _, conn := range ns.connections {
+				if conn.Status.Load() == int32(engine.StateIdle) {
+					if err := ns.app.OnDisconnect(ctx, conn); err != nil {
+						slog.ErrorContext(ctx, "Application error", "error", err)
+					}
+					if conn.Status.CompareAndSwap(int32(engine.StateIdle), int32(engine.StateClosed)) {
+						err := ns.engine.ClosePeer(ctx, conn)
+						if err != nil {
+							slog.WarnContext(ctx, "Failed to close peer", "error", err)
+						}
+					}
 				}
 			}
 		}
+
+		if ns.status == Draining {
+			var unCloseConnections int
+			for _, conn := range ns.connections {
+				if conn.Status.Load() != int32(engine.StateClosed) {
+					unCloseConnections++
+				}
+			}
+			if unCloseConnections == 0 {
+				ns.status = Stopped
+				return
+			}
+			if time.Now().After(drainingDeadline) {
+				ns.status = Stopped
+				slog.WarnContext(ctx, "Draining timeout exceeded")
+				return
+			}
+		}
+
+		// checkPeerStatus
+
+		if errors.Is(recvError, toukaerrors.ErrWouldBlock) {
+			err := ns.engine.WaitEvent()
+			if err != nil {
+				slog.ErrorContext(ctx, "Failed to wait event", "error", err)
+			}
+		}
+
 	}
+}
+
+func (ns *NetworkServer) PrepareClose(ctx context.Context) error {
+	if ns.config.Protocol == "tcp" {
+		err := ns.engine.CancelAccept(ctx, ns.listener)
+		if err != nil {
+			slog.ErrorContext(context.Background(), "Failed to cancel accept", "error", err)
+			return err
+		}
+	}
+	for _, conn := range ns.connections {
+		if conn.Status.Load() != int32(engine.StateClosed) {
+			// 閉じることを送信する
+			// オレオレプロトコルここに来れないわ...困っち
+		}
+	}
+	return nil
 }
 
 func (ns *NetworkServer) Listen(ctx context.Context) error {
@@ -119,7 +208,7 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 	peer := engine.NewPeer(sockAddr.Fd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
 	slog.DebugContext(ctx, "Accepted new connection", "fd", newFd, "localAddr", peer.LocalAddr, "remoteAddr", peer.RemoteAddr)
 
-	ns.connections[newFd] = *peer
+	ns.connections[newFd] = peer
 
 	// Applicationに通知
 	if ns.app != nil {
@@ -172,7 +261,7 @@ func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent)
 
 	// Applicationに処理を委譲
 	if ns.app != nil {
-		response, err := ns.app.OnData(ctx, &peer, data)
+		response, err := ns.app.OnData(ctx, peer, data)
 		if err != nil {
 			slog.Error("Application error", "fd", fd, "error", err)
 			return
