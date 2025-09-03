@@ -346,9 +346,9 @@ func (u *Uring) Timeout(d time.Duration, userData uint64) {
 		Opcode:    IORING_OP_TIMEOUT,
 		Fd:        -1,
 		Address:   uint64(uintptr(unsafe.Pointer(&timeSpec))),
-		UserFlags: IORING_TIMEOUT_ETIME_SUCCESS,
+		UserFlags: IORING_TIMEOUT_ETIME_SUCCESS, //FIXME 設定してもETIMEが必ず出る
 		Len:       1,
-		Offset:    1,
+		Offset:    0,
 		UserData:  userData,
 	}
 
@@ -678,5 +678,7 @@ const (
 )
 
 const (
+	IORING_TIMEOUT_ABS           = 1 << 0
+	IORING_TIMEOUT_REALTIME      = 1 << 3
 	IORING_TIMEOUT_ETIME_SUCCESS = 1 << 5
 )
