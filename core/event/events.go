@@ -24,8 +24,12 @@ func (et EventType) String() string {
 		return "EVENT_TYPE_READ"
 	case EVENT_TYPE_WRITE:
 		return "EVENT_TYPE_WRITE"
+	case EVENT_TYPE_TIMEOUT:
+		return "EVENT_TYPE_TIMEOUT"
 	case EVENT_TYPE_RECVMSG:
 		return "EVENT_TYPE_RECVMSG"
+	case EVENT_TYPE_SENDMSG:
+		return "EVENT_TYPE_SENDMSG"
 	default:
 		return fmt.Sprintf("UNKNOWN: %d", et)
 	}
