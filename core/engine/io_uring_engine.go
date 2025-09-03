@@ -90,7 +90,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		userData := e.decodeUserData(cqeEvent.UserData)
 		if cqeEvent.Res < 0 {
 			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
-			panic("CQE event error") // ここはpanicしない方がいいかもしれません
+			continue
 		}
 
 		switch userData.eventType {
