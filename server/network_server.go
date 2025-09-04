@@ -66,7 +66,7 @@ func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pi
 
 func (ns *NetworkServer) Serve(ctx context.Context) {
 	ns.status = Running
-	drainingDeadline := time.Now().Add(time.Second * 10)
+	var drainingDeadline time.Time
 
 	go func() {
 		select {
@@ -102,6 +102,7 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 
 		if ns.status == Running && ctx.Err() != nil {
 			ns.status = Draining
+			drainingDeadline = time.Now().Add(2 * time.Second)
 			err := ns.PrepareClose(ctx)
 			if err != nil {
 				slog.ErrorContext(ctx, "Failed to prepare shutdown", "error", err)
@@ -141,8 +142,10 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 
 		// checkPeerStatus
 
-		if errors.Is(recvError, toukaerrors.ErrWouldBlock) {
+		//FIXME: running 以外はbusy loopしている
+		if ns.status == Running && errors.Is(recvError, toukaerrors.ErrWouldBlock) {
 			err := ns.engine.WaitEvent()
+			slog.DebugContext(ctx, "Wait event Done")
 			if err != nil {
 				slog.ErrorContext(ctx, "Failed to wait event", "error", err)
 			}
@@ -152,7 +155,9 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 }
 
 func (ns *NetworkServer) PrepareClose(ctx context.Context) error {
+	slog.InfoContext(ctx, "Server Prepare to close")
 	if ns.config.Protocol == "tcp" {
+		slog.DebugContext(ctx, "Shut Prepare to close")
 		err := ns.engine.CancelAccept(ctx, ns.listener)
 		if err != nil {
 			slog.ErrorContext(context.Background(), "Failed to cancel accept", "error", err)
