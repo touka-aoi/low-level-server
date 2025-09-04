@@ -239,10 +239,11 @@ func (u *Uring) RecvFrom(fd int32, userData uint64) *UringSQE {
 	return op
 }
 
-func (u *Uring) Cancel(fd int32, userData uint64) {
+func (u *Uring) Cancel(fd int32, cancelTarget uint64, userData uint64) {
 	op := &UringSQE{
-		Opcode:  IORING_OP_ASYNC_CANCEL,
-		Address: userData,
+		Opcode:   IORING_OP_ASYNC_CANCEL,
+		Address:  cancelTarget,
+		UserData: userData,
 	}
 	u.Submit(op)
 }
