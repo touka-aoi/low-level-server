@@ -239,6 +239,14 @@ func (u *Uring) RecvFrom(fd int32, userData uint64) *UringSQE {
 	return op
 }
 
+func (u *Uring) Cancel(fd int32, userData uint64) {
+	op := &UringSQE{
+		Opcode:  IORING_OP_ASYNC_CANCEL,
+		Address: userData,
+	}
+	u.Submit(op)
+}
+
 func (u *Uring) ReadMultishot(fd int32, userData uint64) *UringSQE {
 	op := &UringSQE{
 		// Opcode:   IORING_OP_READ_MULTISHOT,
