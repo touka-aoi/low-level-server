@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -35,6 +36,7 @@ type UringNetEngine struct {
 }
 
 func (e *UringNetEngine) CancelAccept(ctx context.Context, listener Listener) error {
+	e.uring.Cancel(listener.Fd(), e.encodeUserData(event.EVENT_TYPE_ACCEPT, listener.Fd()), e.encodeUserData(event.EVENT_TYPE_CANCEL, 0))
 	return nil
 }
 
@@ -89,6 +91,16 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	for cqeEvent := range slices.Values(cqeEvents) {
 		userData := e.decodeUserData(cqeEvent.UserData)
 		if cqeEvent.Res < 0 {
+			//FIXME: refactoring me !
+			if userData.eventType == event.EVENT_TYPE_TIMEOUT {
+				continue
+			}
+			if userData.eventType == event.EVENT_TYPE_ACCEPT {
+				if errors.Is(unix.Errno(-cqeEvent.Res), unix.ECANCELED) {
+					slog.DebugContext(ctx, "Accept operation canceled", "fd", userData.fd)
+					continue
+				}
+			}
 			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
 			continue
 		}
@@ -176,8 +188,9 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 
 func (e *UringNetEngine) PrepareClose() error {
 	ud := e.encodeUserData(event.EVENT_TYPE_TIMEOUT, 0)
-	e.uring.Timeout(0, ud)
-	slog.Debug("PrepareClose")
+	//TODO: using engine config timeout time
+	e.uring.Timeout(2*time.Second, ud)
+	slog.Debug("Engine PrepareClose")
 	return nil
 }
 
