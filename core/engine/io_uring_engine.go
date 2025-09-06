@@ -93,6 +93,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 		if cqeEvent.Res < 0 {
 			//FIXME: refactoring me !
 			if userData.eventType == event.EVENT_TYPE_TIMEOUT {
+				//slog.DebugContext(ctx, "get TimeOutEvent", "fd", userData.fd)
 				continue
 			}
 			if userData.eventType == event.EVENT_TYPE_ACCEPT {
@@ -189,7 +190,9 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 func (e *UringNetEngine) PrepareClose() error {
 	ud := e.encodeUserData(event.EVENT_TYPE_TIMEOUT, 0)
 	//TODO: using engine config timeout time
-	e.uring.Timeout(2*time.Second, ud)
+	//e.uring.Timeout(2*time.Second, ud)
+	//TODO:  timeOut時間を短くすると、syscall sys_io_uring_enter failed" err="interrupted system call" errno=4
+	e.uring.TimeoutWithMultiShot(time.Second, ud)
 	slog.Debug("Engine PrepareClose")
 	return nil
 }

@@ -102,7 +102,7 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 
 		if ns.status == Running && ctx.Err() != nil {
 			ns.status = Draining
-			drainingDeadline = time.Now().Add(2 * time.Second)
+			drainingDeadline = time.Now().Add(10 * time.Second)
 			err := ns.PrepareClose(ctx)
 			if err != nil {
 				slog.ErrorContext(ctx, "Failed to prepare shutdown", "error", err)
@@ -129,10 +129,10 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 					unCloseConnections++
 				}
 			}
-			if unCloseConnections == 0 {
-				ns.status = Stopped
-				return
-			}
+			//if unCloseConnections == 0 {
+			//	ns.status = Stopped
+			//	return
+			//}
 			if time.Now().After(drainingDeadline) {
 				ns.status = Stopped
 				slog.WarnContext(ctx, "Draining timeout exceeded")
@@ -142,10 +142,9 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 
 		// checkPeerStatus
 
-		//FIXME: running 以外はbusy loopしている
-		if ns.status == Running && errors.Is(recvError, toukaerrors.ErrWouldBlock) {
+		if errors.Is(recvError, toukaerrors.ErrWouldBlock) {
 			err := ns.engine.WaitEvent()
-			slog.DebugContext(ctx, "Wait event Done")
+			//slog.DebugContext(ctx, "Wait event Done")
 			if err != nil {
 				slog.ErrorContext(ctx, "Failed to wait event", "error", err)
 			}

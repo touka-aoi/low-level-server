@@ -364,6 +364,21 @@ func (u *Uring) Timeout(d time.Duration, userData uint64) {
 	u.Submit(op)
 }
 
+func (u *Uring) TimeoutWithMultiShot(d time.Duration, userData uint64) {
+	timeSpec := unix.NsecToTimespec(d.Nanoseconds())
+	op := &UringSQE{
+		Opcode:    IORING_OP_TIMEOUT,
+		Fd:        -1,
+		Address:   uint64(uintptr(unsafe.Pointer(&timeSpec))),
+		UserFlags: IORING_TIMEOUT_ETIME_SUCCESS | IORING_TIMEOUT_MULTISHOT, //FIXME 設定してもETIMEが必ず出る
+		Len:       1,
+		Offset:    0,
+		UserData:  userData,
+	}
+
+	u.Submit(op)
+}
+
 func (u *Uring) WaitEventWithTimeout(d time.Duration) error {
 	timeSpec := unix.NsecToTimespec(d.Nanoseconds())
 	getEventsArgs := &uringGetEventArgs{
@@ -690,4 +705,5 @@ const (
 	IORING_TIMEOUT_ABS           = 1 << 0
 	IORING_TIMEOUT_REALTIME      = 1 << 3
 	IORING_TIMEOUT_ETIME_SUCCESS = 1 << 5
+	IORING_TIMEOUT_MULTISHOT     = 1 << 6
 )
