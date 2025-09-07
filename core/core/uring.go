@@ -271,7 +271,6 @@ func (u *Uring) Write(fd int32, buffer []byte, userData uint64) {
 		Opcode:   IORING_OP_WRITE,
 		Fd:       fd,
 		Address:  uint64(uintptr(unsafe.Pointer(&buffer[0]))),
-		Flags:    IOSQE_CQE_SKIP_SUCCESS,
 		Len:      uint32(len(buffer)),
 		UserData: userData,
 	}
