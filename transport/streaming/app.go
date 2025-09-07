@@ -36,7 +36,20 @@ func (l *LiveStreamingApp) SetHandler(handler protocol.LiveProtocol) {
 func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *peer.Peer) error {
 	//TODO implement me
 	// 認証情報の検証や接続管理などをここに入れたい
-	//panic("implement me")
+	go func() {
+		slog.DebugContext(ctx, "start sending test")
+		ticker := time.NewTicker(1 * time.Second)
+	LOOP:
+		for {
+			select {
+			case <-ctx.Done():
+				break LOOP
+			case <-ticker.C:
+				peer.Writer.Feed([]byte("this is sending test"))
+			}
+		}
+		slog.DebugContext(ctx, "end sending test")
+	}()
 	return nil
 }
 

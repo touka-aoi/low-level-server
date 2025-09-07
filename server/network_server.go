@@ -80,6 +80,30 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 	}()
 
 	for {
+		//TODO kick方式に変更する
+		for _, p := range ns.connections {
+			if p.Writer.Length()-p.Writer.QueuedByte() > 0 {
+				b1, b2, ok := p.Writer.ViewFrom(p.Writer.QueuedByte(), p.Writer.Length()-p.Writer.QueuedByte())
+				if !ok {
+					slog.ErrorContext(ctx, "Failed to view data", "error", ok)
+					continue
+				}
+				if len(b1) != 0 {
+					err := ns.engine.Write(ctx, p.Fd(), b1)
+					if err != nil {
+						slog.ErrorContext(ctx, "Failed to write data", "error", err)
+					}
+				}
+				if len(b2) != 0 {
+					err := ns.engine.Write(ctx, p.Fd(), b2)
+					if err != nil {
+						slog.ErrorContext(ctx, "Failed to write data", "error", err)
+					}
+				}
+				p.Writer.Advance2(len(b1) + len(b2))
+			}
+		}
+
 		netEvents, recvError := ns.engine.ReceiveData(ctx)
 		if recvError != nil && !errors.Is(recvError, toukaerrors.ErrWouldBlock) {
 			slog.ErrorContext(ctx, "Failed to receive data", "error", recvError)
@@ -92,8 +116,8 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 				ns.handleAccept(ctx, NetEvent)
 			case event.EVENT_TYPE_READ:
 				ns.handleRead(ctx, NetEvent)
-			//case event.EVENT_TYPE_WRITE:
-			//	ns.handleWrite(NetEvent)
+			case event.EVENT_TYPE_WRITE:
+				ns.handleWrite(NetEvent)
 			case event.EVENT_TYPE_RECVMSG:
 				slog.DebugContext(ctx, "Received data from peer", "fd", NetEvent.Fd, "dataLength", len(NetEvent.Data), "data", string(NetEvent.Data))
 			default:
@@ -142,13 +166,13 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 
 		// checkPeerStatus
 
-		if errors.Is(recvError, toukaerrors.ErrWouldBlock) {
-			err := ns.engine.WaitEvent()
-			//slog.DebugContext(ctx, "Wait event Done")
-			if err != nil {
-				slog.ErrorContext(ctx, "Failed to wait event", "error", err)
-			}
-		}
+		//if errors.Is(recvError, toukaerrors.ErrWouldBlock) {
+		//	err := ns.engine.WaitEvent()
+		//	//slog.DebugContext(ctx, "Wait event Done")
+		//	if err != nil {
+		//		slog.ErrorContext(ctx, "Failed to wait event", "error", err)
+		//	}
+		//}
 
 	}
 }
@@ -247,7 +271,7 @@ func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent)
 
 	slog.Debug("Received data from peer", "fd", fd, "dataLength", len(data), "data", string(data))
 
-	peer, ok := ns.connections[fd]
+	p, ok := ns.connections[fd]
 	if !ok {
 		slog.Warn("Peer not found for read event", "fd", fd)
 		return
@@ -256,7 +280,7 @@ func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent)
 	// ミドルウェア実行（ログ等）
 	if ns.pipeline != nil {
 		// あんまこの設計良くないな
-		ctx := middleware.NewContext(data, fd, peer)
+		ctx := middleware.NewContext(data, fd, p)
 		if err := ns.pipeline.Execute(ctx); err != nil {
 			slog.Error("Pipeline execution failed", "fd", fd, "error", err)
 			return
@@ -265,7 +289,7 @@ func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent)
 
 	// Applicationに処理を委譲
 	if ns.app != nil {
-		response, err := ns.app.OnData(ctx, peer, data)
+		response, err := ns.app.OnData(ctx, p, data)
 		if err != nil {
 			slog.Error("Application error", "fd", fd, "error", err)
 			return
