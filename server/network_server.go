@@ -279,3 +279,17 @@ func (ns *NetworkServer) handleRead(ctx context.Context, event *engine.NetEvent)
 		}
 	}
 }
+
+func (ns *NetworkServer) handleWrite(event *engine.NetEvent) {
+	fd := event.Fd
+	if fd < 0 {
+		slog.Warn("Invalid file descriptor for write event", "fd", fd)
+		return
+	}
+	p := ns.connections[fd]
+	if p == nil {
+		slog.Warn("Peer not found for write event", "fd", fd)
+		return
+	}
+	p.Writer.Advance(event.SentLength)
+}
