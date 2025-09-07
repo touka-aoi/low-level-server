@@ -12,6 +12,7 @@ import (
 	toukaerrors "github.com/touka-aoi/low-level-server/core/errors"
 	"github.com/touka-aoi/low-level-server/core/event"
 	"github.com/touka-aoi/low-level-server/middleware"
+	"github.com/touka-aoi/low-level-server/server/peer"
 	"github.com/touka-aoi/low-level-server/transport"
 )
 
@@ -47,7 +48,7 @@ type NetworkServer struct {
 	engine      engine.NetEngine
 	listener    engine.Listener
 	config      NetworkServerConfig
-	connections map[int32]*engine.Peer
+	connections map[int32]*peer.Peer
 	pipeline    *middleware.Pipeline
 	app         transport.Transport
 	status      SrvStatus
@@ -57,7 +58,7 @@ func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pi
 	return &NetworkServer{
 		engine:      netEngine,
 		config:      config,
-		connections: make(map[int32]*engine.Peer),
+		connections: make(map[int32]*peer.Peer),
 		pipeline:    pipeline,
 		app:         app,
 		//oreore:      oreore, オレオレも所有してオレオレする必要がありそう
@@ -91,8 +92,8 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 				ns.handleAccept(ctx, NetEvent)
 			case event.EVENT_TYPE_READ:
 				ns.handleRead(ctx, NetEvent)
-				// case event.EVENT_TYPE_WRITE:
-				// 	ns.handleWrite(NetEvent)
+			//case event.EVENT_TYPE_WRITE:
+			//	ns.handleWrite(NetEvent)
 			case event.EVENT_TYPE_RECVMSG:
 				slog.DebugContext(ctx, "Received data from peer", "fd", NetEvent.Fd, "dataLength", len(NetEvent.Data), "data", string(NetEvent.Data))
 			default:
@@ -108,15 +109,14 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 				slog.ErrorContext(ctx, "Failed to prepare shutdown", "error", err)
 			}
 			for _, conn := range ns.connections {
-				if conn.Status.Load() == int32(engine.StateIdle) {
+				if conn.Status() == peer.StateIdle.String() {
 					if err := ns.app.OnDisconnect(ctx, conn); err != nil {
 						slog.ErrorContext(ctx, "Application error", "error", err)
 					}
-					if conn.Status.CompareAndSwap(int32(engine.StateIdle), int32(engine.StateClosed)) {
-						err := ns.engine.ClosePeer(ctx, conn)
-						if err != nil {
-							slog.WarnContext(ctx, "Failed to close peer", "error", err)
-						}
+					//TODO: update peer status compare and swap
+					err := ns.engine.ClosePeer(ctx, conn.Fd())
+					if err != nil {
+						slog.WarnContext(ctx, "Failed to close peer", "error", err)
 					}
 				}
 			}
@@ -125,7 +125,7 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 		if ns.status == Draining {
 			var unCloseConnections int
 			for _, conn := range ns.connections {
-				if conn.Status.Load() != int32(engine.StateClosed) {
+				if conn.Status() != peer.StateClosed.String() {
 					unCloseConnections++
 				}
 			}
@@ -164,7 +164,7 @@ func (ns *NetworkServer) PrepareClose(ctx context.Context) error {
 		}
 	}
 	for _, conn := range ns.connections {
-		if conn.Status.Load() != int32(engine.StateClosed) {
+		if conn.Status() != peer.StateClosed.String() {
 			// 閉じることを送信する
 			// オレオレプロトコルここに来れないわ...困っち
 		}
@@ -209,14 +209,14 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 		slog.ErrorContext(ctx, "Failed to get peer name", "fd", newFd, "error", err)
 		return
 	}
-	peer := engine.NewPeer(sockAddr.Fd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
-	slog.DebugContext(ctx, "Accepted new connection", "fd", newFd, "localAddr", peer.LocalAddr, "remoteAddr", peer.RemoteAddr)
+	connPeer := peer.NewPeer(sockAddr.Fd, sockAddr.LocalAddr, sockAddr.RemoteAddr)
+	slog.DebugContext(ctx, "Accepted new connection", "fd", newFd, "localAddr", connPeer.LocalAddr, "remoteAddr", connPeer.RemoteAddr)
 
-	ns.connections[newFd] = peer
+	ns.connections[newFd] = connPeer
 
 	// Applicationに通知
 	if ns.app != nil {
-		if err := ns.app.OnConnect(ctx, peer); err != nil {
+		if err := ns.app.OnConnect(ctx, connPeer); err != nil {
 			slog.ErrorContext(ctx, "Application rejected connection", "fd", newFd, "error", err)
 			delete(ns.connections, newFd)
 			return
@@ -224,7 +224,7 @@ func (ns *NetworkServer) handleAccept(ctx context.Context, event *engine.NetEven
 	}
 
 	// 新しい接続に対してREAD操作を登録
-	if err := ns.engine.RegisterRead(ctx, peer); err != nil {
+	if err := ns.engine.RegisterRead(ctx, connPeer.Fd()); err != nil {
 		slog.ErrorContext(ctx, "Failed to register read operation", "fd", newFd, "error", err)
 		delete(ns.connections, newFd)
 		return

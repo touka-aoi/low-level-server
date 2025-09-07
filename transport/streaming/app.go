@@ -6,7 +6,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/touka-aoi/low-level-server/core/engine"
+	"github.com/touka-aoi/low-level-server/server/peer"
 	"github.com/touka-aoi/low-level-server/transport"
 	"github.com/touka-aoi/low-level-server/transport/protocol"
 )
@@ -33,21 +33,21 @@ func (l *LiveStreamingApp) SetHandler(handler protocol.LiveProtocol) {
 	l.handler = handler
 }
 
-func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *engine.Peer) error {
+func (l LiveStreamingApp) OnConnect(ctx context.Context, peer *peer.Peer) error {
 	//TODO implement me
 	// 認証情報の検証や接続管理などをここに入れたい
 	//panic("implement me")
 	return nil
 }
 
-func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error) {
-	if err := peer.Feed(data); err != nil {
+func (l LiveStreamingApp) OnData(ctx context.Context, peer *peer.Peer, data []byte) ([]byte, error) {
+	if err := peer.Reader.Feed(data); err != nil {
 		return nil, err
 	}
 	// 遅延パースの可能性
 	for {
 		header := make([]byte, protocol.HeaderSize)
-		ok := peer.Peek(header)
+		ok := peer.Reader.Peek(header)
 		if !ok {
 			slog.DebugContext(ctx, "Need more data")
 			return nil, errors.New("invalid header")
@@ -60,7 +60,7 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		total := protocol.HeaderSize + int(length)
 		// if total > maxFrameSize {...}
 		b := make([]byte, total)
-		ok = peer.Peek(b)
+		ok = peer.Reader.Peek(b)
 		if !ok {
 			return nil, errors.New("ErrNeedMore")
 		}
@@ -74,7 +74,7 @@ func (l LiveStreamingApp) OnData(ctx context.Context, peer *engine.Peer, data []
 		if l.chw != nil {
 			l.chw <- frameMessage
 		}
-		peer.Advance(total)
+		peer.Reader.Advance(total)
 	}
 }
 
@@ -98,7 +98,7 @@ func (l *LiveStreamingApp) processFrame(ctx context.Context, frame *protocol.Fra
 	}
 }
 
-func (l LiveStreamingApp) OnDisconnect(ctx context.Context, peer *engine.Peer) error {
+func (l LiveStreamingApp) OnDisconnect(ctx context.Context, peer *peer.Peer) error {
 	//TODO implement me
 	// 接続管理を入れる
 	panic("implement me")

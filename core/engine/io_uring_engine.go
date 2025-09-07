@@ -40,7 +40,7 @@ func (e *UringNetEngine) CancelAccept(ctx context.Context, listener Listener) er
 	return nil
 }
 
-func (e *UringNetEngine) ClosePeer(ctx context.Context, peer *Peer) error {
+func (e *UringNetEngine) ClosePeer(ctx context.Context, fd int32) error {
 	return nil
 }
 
@@ -197,10 +197,10 @@ func (e *UringNetEngine) PrepareClose() error {
 	return nil
 }
 
-func (e *UringNetEngine) RegisterRead(ctx context.Context, peer *Peer) error {
-	ud := e.encodeUserData(event.EVENT_TYPE_READ, peer.Fd)
-	op := e.uring.ReadMultishot(peer.Fd, ud)
-	slog.DebugContext(ctx, "Registering read operation", "fd", peer.Fd, "userData", ud)
+func (e *UringNetEngine) RegisterRead(ctx context.Context, fd int32) error {
+	ud := e.encodeUserData(event.EVENT_TYPE_READ, fd)
+	op := e.uring.ReadMultishot(fd, ud)
+	slog.DebugContext(ctx, "Registering read operation", "fd", fd, "userData", ud)
 	e.uring.Submit(op)
 	return nil
 }

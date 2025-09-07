@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/touka-aoi/low-level-server/core/engine"
+	"github.com/touka-aoi/low-level-server/server/peer"
 	"github.com/touka-aoi/low-level-server/transport"
 )
 
@@ -20,7 +20,7 @@ func NewHTTPApplication(router *Router) transport.Transport {
 }
 
 // OnConnect is called when a new connection is established
-func (h *HTTPApplication) OnConnect(ctx context.Context, peer *engine.Peer) error {
+func (h *HTTPApplication) OnConnect(ctx context.Context, peer *peer.Peer) error {
 	slog.DebugContext(ctx, "HTTP connection established",
 		"peer", peer.RemoteAddr,
 		"local", peer.LocalAddr)
@@ -28,7 +28,7 @@ func (h *HTTPApplication) OnConnect(ctx context.Context, peer *engine.Peer) erro
 }
 
 // OnData processes HTTP requests
-func (h *HTTPApplication) OnData(ctx context.Context, peer *engine.Peer, data []byte) ([]byte, error) {
+func (h *HTTPApplication) OnData(ctx context.Context, peer *peer.Peer, data []byte) ([]byte, error) {
 	// Parse HTTP request
 	req, err := ParseHTTPRequest(data)
 	if err != nil {
@@ -58,7 +58,7 @@ func (h *HTTPApplication) OnData(ctx context.Context, peer *engine.Peer, data []
 }
 
 // OnDisconnect is called when a connection is closed
-func (h *HTTPApplication) OnDisconnect(ctx context.Context, peer *engine.Peer) error {
+func (h *HTTPApplication) OnDisconnect(ctx context.Context, peer *peer.Peer) error {
 	slog.DebugContext(ctx, "HTTP connection closed", "peer", peer.RemoteAddr)
 	return nil
 }

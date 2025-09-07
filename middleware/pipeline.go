@@ -1,6 +1,8 @@
 package middleware
 
-import "github.com/touka-aoi/low-level-server/core/engine"
+import (
+	"github.com/touka-aoi/low-level-server/server/peer"
+)
 
 type Context struct {
 	Data     []byte
@@ -8,7 +10,7 @@ type Context struct {
 	Response []byte
 	Fd       int32
 	Metadata map[string]interface{}
-	Peer     *engine.Peer
+	Peer     *peer.Peer
 }
 
 type NextFunc func(*Context) error
@@ -45,7 +47,7 @@ func (p *Pipeline) executeMiddleware(index int, ctx *Context) error {
 	return p.middlewares[index](ctx, next)
 }
 
-func NewContext(data []byte, fd int32, peer *engine.Peer) *Context {
+func NewContext(data []byte, fd int32, peer *peer.Peer) *Context {
 	return &Context{
 		Data:     data,
 		Fd:       fd,

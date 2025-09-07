@@ -38,7 +38,7 @@ func NewRingBuffer(size int) *RingBuffer {
 	}
 }
 
-func (r *RingBuffer) length() int {
+func (r *RingBuffer) Length() int {
 	return int(r.tail - r.head)
 }
 
@@ -46,24 +46,24 @@ func (r *RingBuffer) capacity() int {
 	return len(r.buf)
 }
 
-func (r *RingBuffer) free() int {
-	return r.capacity() - r.length()
+func (r *RingBuffer) Free() int {
+	return r.capacity() - r.Length()
 }
 
-func (r *RingBuffer) advance(n int) {
+func (r *RingBuffer) Advance(n int) {
 	if n <= 0 {
 		slog.Warn("Invalid advance value", "n", n)
 		return
 	}
-	if n > r.length() {
-		slog.Warn("Invalid advance value exceeds buffer length", "n", n, "length", r.length())
-		n = r.length()
+	if n > r.Length() {
+		slog.Warn("Invalid advance value exceeds buffer Length", "n", n, "Length", r.Length())
+		n = r.Length()
 	}
 	r.head += uint64(n)
 }
 
 func (r *RingBuffer) Write(b []byte) (int, error) {
-	if len(b) > r.free() {
+	if len(b) > r.Free() {
 		return 0, ErrBufferFull
 	}
 	i := int(r.tail & r.mask)
@@ -74,7 +74,7 @@ func (r *RingBuffer) Write(b []byte) (int, error) {
 }
 
 func (r *RingBuffer) Peek(dst []byte) bool {
-	if len(dst) > r.length() {
+	if len(dst) > r.Length() {
 		return false
 	}
 	i := int(r.head & r.mask)
@@ -85,8 +85,14 @@ func (r *RingBuffer) Peek(dst []byte) bool {
 	return true
 }
 
+func (r *RingBuffer) PeekOut() []byte {
+	dst := make([]byte, r.Length())
+	r.Peek(dst)
+	return dst
+}
+
 func (r *RingBuffer) View(n int) (a, b []byte, ok bool) {
-	if n > r.length() {
+	if n > r.Length() {
 		return nil, nil, false
 	}
 	i := int(r.head & r.mask)
@@ -95,8 +101,4 @@ func (r *RingBuffer) View(n int) (a, b []byte, ok bool) {
 	}
 	n1 := len(r.buf) - i
 	return r.buf[i:len(r.buf):len(r.buf)], r.buf[: n-n1 : n-n1], true
-}
-
-func (r *RingBuffer) Consume(n int) {
-	r.advance(n)
 }
