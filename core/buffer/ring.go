@@ -102,3 +102,15 @@ func (r *RingBuffer) View(n int) (a, b []byte, ok bool) {
 	n1 := len(r.buf) - i
 	return r.buf[i:len(r.buf):len(r.buf)], r.buf[: n-n1 : n-n1], true
 }
+
+func (r *RingBuffer) ViewFrom(offset, n int) (a, b []byte, ok bool) {
+	if offset+n > r.Length() {
+		return nil, nil, false
+	}
+	i := int((r.head + uint64(offset)) & r.mask)
+	if i+n <= len(r.buf) {
+		return r.buf[i : i+n : i+n], nil, true
+	}
+	n1 := len(r.buf) - i
+	return r.buf[i:len(r.buf):len(r.buf)], r.buf[: n-n1 : n-n1], true
+}

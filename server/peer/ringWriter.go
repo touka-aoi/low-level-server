@@ -53,6 +53,10 @@ func (p *RingWriter) View(n int) ([]byte, []byte, bool) {
 	return p.ring.View(n)
 }
 
+func (p *RingWriter) ViewFrom(offset, n int) (a, b []byte, ok bool) {
+	return p.ring.ViewFrom(offset, n)
+}
+
 func (p *RingWriter) Length() int {
 	return p.ring.Length()
 }
