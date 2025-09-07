@@ -11,4 +11,5 @@ type NetEvent struct {
 	Fd         int32
 	Data       []byte
 	RemoteAddr netip.AddrPort
+	SentLength int
 }

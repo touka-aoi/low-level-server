@@ -136,7 +136,12 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				Data:      b,
 			})
 		case event.EVENT_TYPE_WRITE:
-			// writeイベントはCQEを発行しない
+			// エラーハンドリング
+			netEvents = append(netEvents, &NetEvent{
+				EventType:  event.EVENT_TYPE_WRITE,
+				Fd:         userData.fd,
+				SentLength: int(cqeEvent.Res),
+			})
 		case event.EVENT_TYPE_RECVMSG:
 			if cqeEvent.Flags&core.IORING_CQE_F_BUFFER == 0 {
 				slog.WarnContext(ctx, "Read event without buffer flag", "fd", userData.fd, "flags", cqeEvent.Flags)
