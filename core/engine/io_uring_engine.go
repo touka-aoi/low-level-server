@@ -81,7 +81,7 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	}
 
 	if len(cqeEvents) == 0 {
-		return nil, toukaerrors.ErrWouldBlock // ここwouldBlockの方がいい そんなことあります
+		return nil, toukaerrors.ErrWouldBlock
 	}
 
 	// slog.DebugContext(ctx, "Received CQE events", "cqeEvents", cqeEvents)
@@ -91,23 +91,17 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 	for cqeEvent := range slices.Values(cqeEvents) {
 		userData := e.decodeUserData(cqeEvent.UserData)
 		if cqeEvent.Res < 0 {
-			//FIXME: refactoring me !
-			if userData.eventType == event.EVENT_TYPE_TIMEOUT {
-				//slog.DebugContext(ctx, "get TimeOutEvent", "fd", userData.fd)
-				continue
-			}
-			if userData.eventType == event.EVENT_TYPE_ACCEPT {
+			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
+		}
+
+		switch userData.eventType {
+		case event.EVENT_TYPE_ACCEPT:
+			if cqeEvent.Res < 0 {
 				if errors.Is(unix.Errno(-cqeEvent.Res), unix.ECANCELED) {
 					slog.DebugContext(ctx, "Accept operation canceled", "fd", userData.fd)
 					continue
 				}
 			}
-			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
-			continue
-		}
-
-		switch userData.eventType {
-		case event.EVENT_TYPE_ACCEPT:
 			netEvents = append(netEvents, &NetEvent{
 				EventType: event.EVENT_TYPE_ACCEPT,
 				Fd:        cqeEvent.Res,
@@ -176,6 +170,12 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 				RemoteAddr: remoteAddr,
 			})
 		case event.EVENT_TYPE_TIMEOUT:
+			if cqeEvent.Res < 0 {
+				if errors.Is(unix.Errno(-cqeEvent.Res), unix.ECANCELED) {
+					slog.DebugContext(ctx, "Timeout operation canceled", "fd", userData.fd)
+					continue
+				}
+			}
 			slog.DebugContext(ctx, "Timeout event")
 		default:
 			slog.WarnContext(ctx, "Unknown event type", "eventType", userData.eventType)
