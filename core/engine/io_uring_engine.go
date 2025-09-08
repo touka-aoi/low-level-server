@@ -90,9 +90,6 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 
 	for cqeEvent := range slices.Values(cqeEvents) {
 		userData := e.decodeUserData(cqeEvent.UserData)
-		if cqeEvent.Res < 0 {
-			slog.ErrorContext(ctx, "Error in CQE event", "eventType", userData.eventType, "fd", userData.fd, "error", cqeEvent.Res)
-		}
 
 		switch userData.eventType {
 		case event.EVENT_TYPE_ACCEPT:
@@ -181,7 +178,15 @@ func (e *UringNetEngine) ReceiveData(ctx context.Context) ([]*NetEvent, error) {
 					continue
 				}
 			}
-			slog.DebugContext(ctx, "Timeout event")
+		case event.EVENT_TYPE_CANCEL:
+			if cqeEvent.Res < 0 {
+				if errors.Is(unix.Errno(-cqeEvent.Res), unix.ECANCELED) {
+					slog.DebugContext(ctx, "Cancel operation canceled", "fd", userData.fd)
+					continue
+				}
+				slog.DebugContext(ctx, "Cancel operation result", "fd", userData.fd, "res", cqeEvent.Res)
+			}
+			slog.DebugContext(ctx, "Cancel operation", "fd", userData.fd, "res", cqeEvent.Res)
 		default:
 			slog.WarnContext(ctx, "Unknown event type", "eventType", userData.eventType)
 			// 他のイベントタイプはここで処理する必要があります
