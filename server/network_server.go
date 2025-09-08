@@ -45,13 +45,15 @@ func (s SrvStatus) String() string {
 }
 
 type NetworkServer struct {
-	engine      engine.NetEngine
-	listener    engine.Listener
-	config      NetworkServerConfig
-	connections map[int32]*peer.Peer
-	pipeline    *middleware.Pipeline
-	app         transport.Transport
-	status      SrvStatus
+	engine       engine.NetEngine
+	listener     engine.Listener
+	config       NetworkServerConfig
+	connections  map[int32]*peer.Peer
+	pipeline     *middleware.Pipeline
+	app          transport.Transport
+	status       SrvStatus
+	sendingPeer  chan int32
+	sendingQueue []int32
 }
 
 func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pipeline *middleware.Pipeline, app transport.Transport) *NetworkServer {
@@ -62,6 +64,9 @@ func NewNetworkServer(netEngine engine.NetEngine, config NetworkServerConfig, pi
 		pipeline:    pipeline,
 		app:         app,
 		//oreore:      oreore, オレオレも所有してオレオレする必要がありそう
+
+		sendingPeer:  make(chan int32, maxConnections),
+		sendingQueue: make([]int32, maxConnections),
 	}
 }
 
@@ -79,9 +84,26 @@ func (ns *NetworkServer) Serve(ctx context.Context) {
 		}
 	}()
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case p := <-ns.sendingPeer:
+				ns.sendingQueue = append(ns.sendingQueue, p)
+				if len(ns.sendingQueue) <= 1 {
+					err := ns.engine.Kick(ctx)
+					if err != nil {
+						slog.ErrorContext(ctx, "Failed to kick", "error", err)
+					}
+				}
+			}
+		}
+	}()
+
 	for {
-		//TODO kick方式に変更する
-		for _, p := range ns.connections {
+		for _, fd := range ns.sendingQueue {
+			p := ns.connections[fd]
 			if p.Writer.Length()-p.Writer.QueuedByte() > 0 {
 				b1, b2, ok := p.Writer.ViewFrom(p.Writer.QueuedByte(), p.Writer.Length()-p.Writer.QueuedByte())
 				if !ok {

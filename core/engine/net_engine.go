@@ -17,5 +17,6 @@ type NetEngine interface {
 	PrepareClose() error
 	GetSockAddr(ctx context.Context, fd int32) (*SockAddr, error)
 	ClosePeer(ctx context.Context, fd int32) error
+	Kick(ctx context.Context) error
 	Close() error
 }

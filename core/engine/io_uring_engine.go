@@ -276,6 +276,10 @@ func (e *UringNetEngine) GetSockAddr(ctx context.Context, fd int32) (*SockAddr, 
 func (e *UringNetEngine) Write(ctx context.Context, fd int32, data []byte) error {
 	userData := e.encodeUserData(event.EVENT_TYPE_WRITE, fd)
 	e.uring.Write(fd, data, userData)
-	slog.DebugContext(ctx, "Submitted write operation", "fd", fd, "dataLength", len(data))
+	//slog.DebugContext(ctx, "Submitted write operation", "fd", fd, "dataLength", len(data))
+	return nil
+}
+
+func (e *UringNetEngine) Kick(ctx context.Context) error {
 	return nil
 }
