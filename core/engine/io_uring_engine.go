@@ -202,7 +202,7 @@ func (e *UringNetEngine) PrepareClose() error {
 	//TODO: using engine config timeout time
 	//e.uring.Timeout(2*time.Second, ud)
 	//TODO:  timeOut時間を短くすると、syscall sys_io_uring_enter failed" err="interrupted system call" errno=4
-	e.uring.TimeoutWithMultiShot(time.Second, ud)
+	e.uring.TimeoutWithMultiShot(2*time.Millisecond, ud)
 	slog.Debug("Engine PrepareClose")
 	return nil
 }
