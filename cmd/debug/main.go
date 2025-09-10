@@ -78,4 +78,6 @@ func main() {
 	networkServer.Serve(ctx)
 
 	slog.Info("Server stopped")
+
+	slog.Error("限界")
 }
