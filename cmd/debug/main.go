@@ -80,4 +80,5 @@ func main() {
 	slog.Info("Server stopped")
 
 	slog.Error("限界")
+	slog.Error("限界２")
 }
